@@ -19,6 +19,18 @@ import { fetchTranscript } from 'youtube-transcript-plus';
  */
 export async function getChunkedTranscript(videoId, chunkSeconds = 600) {
   const segments = await fetchTranscript(videoId);
+  return chunkSegments(segments, chunkSeconds);
+}
+
+/**
+ * Groups a flat array of {offset, duration, text} segments (offset/duration
+ * in milliseconds) into timestamped chunks. Factored out of
+ * getChunkedTranscript() so the Whisper fallback (whisper-fallback.js) can
+ * produce identically-shaped output from a completely different segment
+ * source (OpenAI's API instead of youtube-transcript-plus), letting callers
+ * treat both transcript sources interchangeably.
+ */
+export function chunkSegments(segments, chunkSeconds = 600) {
   if (!segments.length) {
     return { chunks: [], totalWords: 0, totalDurationSeconds: 0 };
   }

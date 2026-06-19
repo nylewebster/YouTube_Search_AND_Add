@@ -41,6 +41,11 @@ if (!BASE_URL) {
 
 const yt = createYouTubeClient();
 
+if (!process.env.OPENAI_API_KEY) {
+  console.error('WARNING: OPENAI_API_KEY is not set. The Whisper transcript fallback will be skipped');
+  console.error('whenever YouTube captions are unavailable — summaries will drop to metadata-only instead.');
+}
+
 function buildServer() {
   const server = new Server(
     { name: 'youtube-playlist-agent', version: '2.0.0' },
