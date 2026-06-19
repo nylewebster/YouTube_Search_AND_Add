@@ -4,6 +4,7 @@
  * logic only needs to be correct once.
  */
 import { YouTubeClient } from './youtube-client.js';
+import { getChunkedTranscript, classifyTranscriptError } from './transcript-client.js';
 
 const DEFAULT_PLAYLIST_NAME = process.env.DEFAULT_PLAYLIST_NAME || 'Using Claude AI';
 const DEFAULT_RESULT_COUNT = parseInt(process.env.DEFAULT_RESULT_COUNT || '10', 10);
@@ -94,13 +95,15 @@ export const toolDefinitions = [
   {
     name: 'youtube_summarize_video',
     description:
-      'Get a summary of a video based on its title, description, channel, duration, tags, and ' +
-      'view/like counts. IMPORTANT LIMITATION: this does NOT read the video\'s actual transcript ' +
-      '— the official YouTube API can only fetch transcripts/captions for videos the authenticated ' +
-      'user owns, not arbitrary public videos. The summary is built from metadata only, so it ' +
-      'reflects what the creator wrote in the title/description, not necessarily everything said ' +
-      'in the video. Identify the video either by videoId directly, or by playlistName + position ' +
-      '(e.g. "the first video in my Guilty Gear playlist" -> playlistName + position=1).',
+      'Get a summary of a video. By default, attempts to fetch the actual spoken transcript ' +
+      '(chunked into timestamped sections) so you can produce a real content summary, not just ' +
+      'metadata — this matters most for long-form videos (podcasts, streams, lectures) where the ' +
+      'description doesn\'t capture what\'s actually said. IMPORTANT: transcript fetching uses an ' +
+      'UNOFFICIAL method (the official YouTube API can\'t fetch transcripts for videos this account ' +
+      'doesn\'t own) and may fail — if it does, this tool automatically falls back to a metadata-only ' +
+      'summary (title/description/stats) and tells you that happened. Identify the video either by ' +
+      'videoId directly, or by playlistName + position (e.g. "the first video in my Guilty Gear ' +
+      'playlist" -> playlistName + position=1).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -112,6 +115,14 @@ export const toolDefinitions = [
         position: {
           type: 'integer',
           description: '1-based position within the playlist (1 = first video). Used with playlistName.'
+        },
+        includeTranscript: {
+          type: 'boolean',
+          description: 'Attempt to fetch the real transcript (default true). Set false to skip straight to metadata-only.'
+        },
+        chunkMinutes: {
+          type: 'integer',
+          description: 'Length of each timestamped transcript chunk in minutes (default 10). Smaller chunks = more granular but more chunks to read.'
         }
       },
       required: []
@@ -209,18 +220,59 @@ export async function handleToolCall(yt, name, args) {
       }
 
       const details = await yt.getVideoDetails(videoId);
+      const wantsTranscript = args.includeTranscript !== false;
+      const chunkSeconds = (args.chunkMinutes || 10) * 60;
 
+      let transcriptResult = null;
+      let transcriptError = null;
+
+      if (wantsTranscript) {
+        try {
+          const { chunks, totalWords, totalDurationSeconds } = await getChunkedTranscript(videoId, chunkSeconds);
+          transcriptResult = { chunks, totalWords, totalDurationSeconds, chunkCount: chunks.length };
+        } catch (err) {
+          transcriptError = {
+            classification: classifyTranscriptError(err),
+            message: err.message || String(err)
+          };
+        }
+      }
+
+      const base = {
+        ...details,
+        durationFormatted: formatIsoDuration(details.duration),
+        description: truncateDescription(details.description),
+        playlistContext
+      };
+
+      if (transcriptResult) {
+        return [{
+          type: 'text',
+          text: JSON.stringify({
+            ...base,
+            transcriptAvailable: true,
+            transcript: transcriptResult,
+            note:
+              'Transcript fetched successfully via an unofficial method (not the official YouTube API). ' +
+              'The "chunks" array contains the actual spoken content broken into timestamped sections — ' +
+              'use this to produce a real content summary covering what was actually said, not just metadata. ' +
+              'For long videos, consider summarizing chunk-by-chunk or grouping related chunks together.'
+          }, null, 2)
+        }];
+      }
+
+      // Fell back to metadata-only — either transcript was skipped or fetching failed.
       return [{
         type: 'text',
         text: JSON.stringify({
-          ...details,
-          durationFormatted: formatIsoDuration(details.duration),
-          description: truncateDescription(details.description),
-          playlistContext,
-          caveat:
-            "This summary is built from the video's title, description, tags, and stats only. " +
-            "The official YouTube API cannot fetch transcripts for videos this account doesn't own, " +
-            "so spoken content not mentioned in the description isn't reflected here."
+          ...base,
+          transcriptAvailable: false,
+          transcriptError: transcriptError,
+          caveat: wantsTranscript
+            ? `Transcript fetch failed (${transcriptError?.classification || 'unknown'}: ${transcriptError?.message || 'no details'}), ` +
+              `so this summary is metadata-only (title/description/stats). It does not reflect spoken ` +
+              `content beyond what's in the description.`
+            : `Transcript fetch was skipped (includeTranscript=false). This summary is metadata-only.`
         }, null, 2)
       }];
     }

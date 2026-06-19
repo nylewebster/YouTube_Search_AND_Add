@@ -25,10 +25,6 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { createYouTubeClient, toolDefinitions, handleToolCall } from './youtube-tools.js';
 import { registerOAuthRoutes, validateAccessToken } from './oauth.js';
-import { transcriptTestToolDefinition, handleTranscriptTest } from './transcript-test.js';
-
-console.error('[startup] toolDefinitions imported:', Array.isArray(toolDefinitions), toolDefinitions?.length);
-console.error('[startup] transcriptTestToolDefinition imported:', typeof transcriptTestToolDefinition, transcriptTestToolDefinition?.name);
 
 const PORT = process.env.PORT || 3000;
 
@@ -50,19 +46,13 @@ function buildServer() {
     { name: 'youtube-playlist-agent', version: '2.0.0' },
     { capabilities: { tools: {} } }
   );
-  const allTools = [...toolDefinitions, transcriptTestToolDefinition];
-  console.error('[buildServer] allTools constructed with length:', allTools.length, 'names:', allTools.map(t => t?.name));
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    console.error(`[tools/list] returning ${allTools.length} tools: ${allTools.map(t => t.name).join(', ')}`);
-    return { tools: allTools };
+    console.error(`[tools/list] returning ${toolDefinitions.length} tools: ${toolDefinitions.map(t => t.name).join(', ')}`);
+    return { tools: toolDefinitions };
   });
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     try {
-      if (name === 'youtube_test_transcript_fetch') {
-        const content = await handleTranscriptTest(args);
-        return { content };
-      }
       const content = await handleToolCall(yt, name, args);
       return { content };
     } catch (err) {
