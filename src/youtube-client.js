@@ -119,6 +119,54 @@ export class YouTubeClient {
     );
   }
 
+  /**
+   * Get playlist items in playlist order (position 0 = first video added,
+   * NOT necessarily "added first chronologically" if items were reordered
+   * in the YouTube UI — position reflects current playlist order).
+   */
+  async getPlaylistItems(playlistId, maxResults = 50) {
+    const data = await this._get('playlistItems', {
+      part: 'snippet,contentDetails',
+      playlistId,
+      maxResults
+    });
+    return (data.items || [])
+      .sort((a, b) => (a.snippet.position ?? 0) - (b.snippet.position ?? 0))
+      .map(item => ({
+        videoId: item.contentDetails.videoId,
+        title: item.snippet.title,
+        position: item.snippet.position
+      }));
+  }
+
+  /**
+   * Full video details useful for a metadata-based summary: title,
+   * description, channel, duration, view count, tags. This does NOT
+   * include a transcript — the official API can't fetch transcripts for
+   * videos you don't own (see youtube-tools.js for the explanation surfaced
+   * to the user).
+   */
+  async getVideoDetails(videoId) {
+    const data = await this._get('videos', {
+      part: 'snippet,contentDetails,statistics',
+      id: videoId
+    });
+    const item = data.items?.[0];
+    if (!item) throw new Error(`No video found with ID ${videoId}`);
+    return {
+      videoId,
+      title: item.snippet.title,
+      channel: item.snippet.channelTitle,
+      description: item.snippet.description || '',
+      publishedAt: item.snippet.publishedAt,
+      tags: item.snippet.tags || [],
+      duration: item.contentDetails.duration, // ISO 8601, e.g. PT32M32S
+      viewCount: item.statistics?.viewCount ?? null,
+      likeCount: item.statistics?.likeCount ?? null,
+      url: `https://youtu.be/${videoId}`
+    };
+  }
+
   /** Create a new playlist. */
   async createPlaylist(title, description = '', privacyStatus = 'private') {
     const data = await this._post('playlists', { part: 'snippet,status' }, {

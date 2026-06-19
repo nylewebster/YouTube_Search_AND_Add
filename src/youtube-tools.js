@@ -92,6 +92,31 @@ export const toolDefinitions = [
     inputSchema: { type: 'object', properties: {} }
   },
   {
+    name: 'youtube_summarize_video',
+    description:
+      'Get a summary of a video based on its title, description, channel, duration, tags, and ' +
+      'view/like counts. IMPORTANT LIMITATION: this does NOT read the video\'s actual transcript ' +
+      '— the official YouTube API can only fetch transcripts/captions for videos the authenticated ' +
+      'user owns, not arbitrary public videos. The summary is built from metadata only, so it ' +
+      'reflects what the creator wrote in the title/description, not necessarily everything said ' +
+      'in the video. Identify the video either by videoId directly, or by playlistName + position ' +
+      '(e.g. "the first video in my Guilty Gear playlist" -> playlistName + position=1).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        videoId: { type: 'string', description: 'YouTube video ID to summarize' },
+        playlistName: {
+          type: 'string',
+          description: 'Playlist to pull the video from, if not specifying videoId directly'
+        },
+        position: {
+          type: 'integer',
+          description: '1-based position within the playlist (1 = first video). Used with playlistName.'
+        }
+      }
+    }
+  },
+  {
     name: 'youtube_create_playlist',
     description: 'Create a new YouTube playlist.',
     inputSchema: {
@@ -160,6 +185,45 @@ export async function handleToolCall(yt, name, args) {
       return [{ type: 'text', text: JSON.stringify(playlists, null, 2) }];
     }
 
+    case 'youtube_summarize_video': {
+      let videoId = args.videoId;
+      let playlistContext = null;
+
+      if (!videoId) {
+        if (!args.playlistName) {
+          throw new Error('Provide either videoId, or playlistName (with optional position).');
+        }
+        const playlist = await resolvePlaylistId(yt, args.playlistName);
+        const items = await yt.getPlaylistItems(playlist.id);
+        if (!items.length) {
+          throw new Error(`Playlist "${playlist.title}" has no videos.`);
+        }
+        const pos = (args.position || 1) - 1; // 1-based -> 0-based
+        const item = items[pos];
+        if (!item) {
+          throw new Error(`Playlist "${playlist.title}" has ${items.length} video(s); position ${args.position} is out of range.`);
+        }
+        videoId = item.videoId;
+        playlistContext = { playlistTitle: playlist.title, position: pos + 1, totalItems: items.length };
+      }
+
+      const details = await yt.getVideoDetails(videoId);
+
+      return [{
+        type: 'text',
+        text: JSON.stringify({
+          ...details,
+          durationFormatted: formatIsoDuration(details.duration),
+          description: truncateDescription(details.description),
+          playlistContext,
+          caveat:
+            "This summary is built from the video's title, description, tags, and stats only. " +
+            "The official YouTube API cannot fetch transcripts for videos this account doesn't own, " +
+            "so spoken content not mentioned in the description isn't reflected here."
+        }, null, 2)
+      }];
+    }
+
     case 'youtube_create_playlist': {
       const playlist = await yt.createPlaylist(args.title, args.description || '', args.privacy || 'private');
       return [{ type: 'text', text: JSON.stringify(playlist, null, 2) }];
@@ -168,4 +232,22 @@ export async function handleToolCall(yt, name, args) {
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
+}
+
+/** Converts YouTube's ISO 8601 duration (e.g. "PT32M32S") to "32:32". */
+function formatIsoDuration(iso) {
+  const match = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!match) return iso;
+  const [, h, m, s] = match;
+  const hh = parseInt(h || '0', 10);
+  const mm = parseInt(m || '0', 10);
+  const ss = parseInt(s || '0', 10);
+  const parts = hh > 0 ? [hh, mm, ss] : [mm, ss];
+  return parts.map((p, i) => (i === 0 ? String(p) : String(p).padStart(2, '0'))).join(':');
+}
+
+/** Keeps descriptions from blowing up the response; full text is rarely needed. */
+function truncateDescription(desc, maxLen = 1500) {
+  if (desc.length <= maxLen) return desc;
+  return desc.slice(0, maxLen) + '… [truncated]';
 }
