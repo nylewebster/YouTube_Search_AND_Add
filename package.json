@@ -16,6 +16,6 @@
     "@modelcontextprotocol/sdk": "^1.25.2",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
-    "youtube-transcript-plus": "^1.2.4"
+    "youtube-transcript-plus": "^1.2.0"
   }
 }
