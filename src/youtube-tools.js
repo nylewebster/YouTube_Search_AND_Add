@@ -113,7 +113,8 @@ export const toolDefinitions = [
           type: 'integer',
           description: '1-based position within the playlist (1 = first video). Used with playlistName.'
         }
-      }
+      },
+      required: []
     }
   },
   {
