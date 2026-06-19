@@ -3,13 +3,9 @@
  * Remote (HTTP) entrypoint — run this on a host like Railway so Claude on
  * any device, including mobile, can reach it over the internet.
  *
- * Auth model: every request must include
- *   Authorization: Bearer <MCP_ACCESS_TOKEN>
- * MCP_ACCESS_TOKEN is a secret you generate yourself and set as an
- * environment variable on the host — it's not your Google credentials,
- * it's a separate password that gates access to this server specifically.
- * Without it, anyone who finds the URL could add/search videos using your
- * YouTube account, which is why this is non-optional for a public endpoint.
+ * Auth model: real OAuth 2.0 (authorization code + PKCE), implemented in
+ * oauth.js, using a fixed Client ID/Secret you set yourself as environment
+ * variables — see README Part 2 for the full setup walkthrough.
  */
 import { config } from 'dotenv';
 import { fileURLToPath } from 'node:url';
@@ -28,14 +24,18 @@ import {
   isInitializeRequest
 } from '@modelcontextprotocol/sdk/types.js';
 import { createYouTubeClient, toolDefinitions, handleToolCall } from './youtube-tools.js';
+import { registerOAuthRoutes, validateAccessToken } from './oauth.js';
 
 const PORT = process.env.PORT || 3000;
-const ACCESS_TOKEN = process.env.MCP_ACCESS_TOKEN;
 
-if (!ACCESS_TOKEN) {
-  console.error('FATAL: MCP_ACCESS_TOKEN is not set. Refusing to start an unauthenticated public server.');
-  console.error('Generate a long random secret and set it as an environment variable, e.g.:');
-  console.error('  node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+// BASE_URL must be your actual public Railway URL (e.g.
+// https://youtubesearchandadd-production.up.railway.app). It's used inside
+// the OAuth metadata documents, so it has to be correct and exact — no
+// trailing slash.
+const BASE_URL = process.env.BASE_URL;
+if (!BASE_URL) {
+  console.error('FATAL: BASE_URL is not set. Set it to this server\'s public URL, e.g.');
+  console.error('  https://youtubesearchandadd-production.up.railway.app');
   process.exit(1);
 }
 
@@ -62,17 +62,20 @@ function buildServer() {
 const app = express();
 app.use(express.json());
 
+registerOAuthRoutes(app, { baseUrl: BASE_URL });
+
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
 function requireAuth(req, res, next) {
-  const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-  if (token !== ACCESS_TOKEN) {
-    res.status(401).json({ error: 'Unauthorized' });
+  if (!validateAccessToken(req)) {
+    res
+      .status(401)
+      .set('WWW-Authenticate', `Bearer resource_metadata="${BASE_URL}/.well-known/oauth-protected-resource"`)
+      .json({ error: 'Unauthorized' });
     return;
   }
   next();
 }
-
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 const sessions = {};
 
@@ -116,7 +119,9 @@ app.delete('/mcp', requireAuth, async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.error(`YouTube MCP server listening on port ${PORT} (HTTP/remote mode).`);
+  console.error(`YouTube MCP server listening on port ${PORT} (HTTP/OAuth mode).`);
+  console.error(`Base URL: ${BASE_URL}`);
   console.error(`Health check: GET /health`);
-  console.error(`MCP endpoint:  POST/GET/DELETE /mcp  (Bearer token required)`);
+  console.error(`MCP endpoint:  POST/GET/DELETE /mcp`);
+  console.error(`OAuth metadata: GET /.well-known/oauth-authorization-server`);
 });
