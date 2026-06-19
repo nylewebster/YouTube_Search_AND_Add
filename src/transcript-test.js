@@ -58,6 +58,24 @@ export async function handleTranscriptTest(args) {
     }];
   } catch (err) {
     const elapsedMs = Date.now() - startedAt;
+    const isRateLimited = err.name === 'YoutubeTranscriptTooManyRequestError';
+    const isNoTranscript =
+      err.name === 'YoutubeTranscriptDisabledError' ||
+      err.name === 'YoutubeTranscriptNotAvailableError';
+
+    let note;
+    if (isRateLimited) {
+      note = 'YouTube is actively rate-limiting/blocking requests from this server\'s IP address. ' +
+             'This is the Railway-blocking scenario we were testing for — confirms this approach ' +
+             'is NOT reliably usable from this deployment without a proxy or a paid third-party API.';
+    } else if (isNoTranscript) {
+      note = 'This specific video has no transcript/captions available (not a blocking issue). ' +
+             'Try a different video known to have captions before concluding anything about Railway.';
+    } else {
+      note = 'Fetch failed for an unexpected reason — could be a YouTube page-structure change ' +
+             'breaking this library, or something else. See errorName/errorMessage for specifics.';
+    }
+
     return [{
       type: 'text',
       text: JSON.stringify({
@@ -66,10 +84,9 @@ export async function handleTranscriptTest(args) {
         elapsedMs,
         errorName: err.name || null,
         errorMessage: err.message || String(err),
-        note: 'Fetch failed. This could mean: (1) the video has no captions at all, ' +
-              '(2) YouTube is blocking requests from this server\'s IP range (common for cloud hosts ' +
-              'like Railway), or (3) youtube-transcript-plus needs an update for a recent YouTube change. ' +
-              'Try a different, well-known video with confirmed captions to rule out cause (1).'
+        isRateLimited,
+        isNoTranscript,
+        note
       }, null, 2)
     }];
   }
