@@ -247,14 +247,17 @@ export async function handleToolCall(yt, name, args) {
 
           const allowWhisper = args.allowWhisperFallback !== false;
           if (allowWhisper && whisperFallbackAvailable()) {
+            console.error(`[youtube_summarize_video] captions failed for ${videoId} (${transcriptError.classification}), trying Whisper fallback`);
             try {
               const { chunks, totalWords, totalDurationSeconds } = await getChunkedTranscriptViaWhisper(videoId, chunkSeconds);
               transcriptResult = { chunks, totalWords, totalDurationSeconds, chunkCount: chunks.length };
               transcriptSource = 'whisper_fallback';
             } catch (whisperErr) {
+              console.error(`[youtube_summarize_video] Whisper fallback failed for ${videoId}: ${whisperErr.message}`);
               transcriptError.whisperFallback = { message: whisperErr.message || String(whisperErr) };
             }
           } else if (allowWhisper) {
+            console.error(`[youtube_summarize_video] captions failed for ${videoId} and Whisper fallback is unavailable (no OPENAI_API_KEY)`);
             transcriptError.whisperFallback = { message: 'OPENAI_API_KEY not set on the server — Whisper fallback unavailable.' };
           }
         }

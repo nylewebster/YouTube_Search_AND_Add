@@ -49,6 +49,7 @@ export function whisperFallbackAvailable() {
  * automatically swept between requests within a running instance.
  */
 async function downloadAudio(videoId) {
+  console.error(`[whisper-fallback] starting audio download for video ${videoId} (max ${MAX_DURATION_SECONDS}s)`);
   const dir = await mkdtemp(path.join(tmpdir(), `yt-audio-${videoId}-`));
   const outputTemplate = path.join(dir, 'audio.%(ext)s');
 
@@ -76,19 +77,23 @@ async function downloadAudio(videoId) {
   } catch (err) {
     await rm(dir, { recursive: true, force: true });
     if (err.killed) {
+      console.error(`[whisper-fallback] yt-dlp timed out for video ${videoId}`);
       throw new Error('yt-dlp timed out downloading audio (video may be too long, or the network is slow).');
     }
     if (/does not pass filter/i.test(err.stderr || '')) {
+      console.error(`[whisper-fallback] video ${videoId} exceeds duration cap (${MAX_DURATION_SECONDS}s)`);
       throw new Error(
         `Video exceeds the ${MAX_DURATION_SECONDS}s duration cap for Whisper fallback ` +
         `(set WHISPER_MAX_DURATION_SECONDS to raise it).`
       );
     }
+    console.error(`[whisper-fallback] yt-dlp failed for video ${videoId}: ${(err.stderr || err.message || '').slice(0, 1000)}`);
     throw new Error(`yt-dlp failed to download audio: ${(err.stderr || err.message || '').slice(0, 500)}`);
   }
 
   if (/does not pass filter/i.test(stdout + stderr)) {
     await rm(dir, { recursive: true, force: true });
+    console.error(`[whisper-fallback] video ${videoId} exceeds duration cap (${MAX_DURATION_SECONDS}s)`);
     throw new Error(
       `Video exceeds the ${MAX_DURATION_SECONDS}s duration cap for Whisper fallback ` +
       `(set WHISPER_MAX_DURATION_SECONDS to raise it).`
@@ -99,15 +104,19 @@ async function downloadAudio(videoId) {
   const { size } = await stat(filePath).catch(() => ({ size: 0 }));
   if (!size) {
     await rm(dir, { recursive: true, force: true });
+    console.error(`[whisper-fallback] yt-dlp produced no audio file for video ${videoId}. stdout: ${stdout.slice(0, 500)} stderr: ${stderr.slice(0, 500)}`);
     throw new Error('yt-dlp reported success but produced no audio file — the video may be unavailable or blocked.');
   }
   if (size > MAX_AUDIO_BYTES) {
     await rm(dir, { recursive: true, force: true });
+    console.error(`[whisper-fallback] audio for video ${videoId} is ${(size / 1024 / 1024).toFixed(1)}MB, over the 25MB limit`);
     throw new Error(
       `Extracted audio is ${(size / 1024 / 1024).toFixed(1)}MB, over OpenAI's 25MB limit. ` +
       `Try a shorter video, or lower WHISPER_MAX_DURATION_SECONDS so long videos get rejected earlier.`
     );
   }
+
+  console.error(`[whisper-fallback] downloaded audio for video ${videoId}: ${(size / 1024 / 1024).toFixed(2)}MB`);
 
   return {
     filePath,
@@ -127,6 +136,8 @@ async function transcribeAudio(filePath) {
   }
 
   const buffer = await readFile(filePath);
+  console.error(`[whisper-fallback] sending ${(buffer.length / 1024 / 1024).toFixed(2)}MB to OpenAI (model=${WHISPER_MODEL})`);
+
   const form = new FormData();
   form.append('file', new Blob([buffer], { type: 'audio/mpeg' }), 'audio.mp3');
   form.append('model', WHISPER_MODEL);
@@ -141,9 +152,11 @@ async function transcribeAudio(filePath) {
 
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
+    console.error(`[whisper-fallback] OpenAI Whisper API error (${res.status}): ${errText.slice(0, 1000)}`);
     throw new Error(`OpenAI Whisper API error (${res.status}): ${errText.slice(0, 500)}`);
   }
 
+  console.error('[whisper-fallback] OpenAI transcription succeeded');
   return res.json(); // { text, segments: [{ start, end, text, ... }], ... }
 }
 
@@ -162,8 +175,9 @@ export async function getChunkedTranscriptViaWhisper(videoId, chunkSeconds = 600
       duration: Math.max(0, (seg.end - seg.start)) * 1000,
       text: seg.text
     }));
+    console.error(`[whisper-fallback] video ${videoId} done — ${segments.length} segments`);
     return chunkSegments(segments, chunkSeconds);
   } finally {
-    await cleanup();
+    await cleanup().catch(err => console.error(`[whisper-fallback] cleanup failed for video ${videoId}: ${err.message}`));
   }
 }
