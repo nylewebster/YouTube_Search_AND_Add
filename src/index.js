@@ -46,7 +46,10 @@ function buildServer() {
     { name: 'youtube-playlist-agent', version: '2.0.0' },
     { capabilities: { tools: {} } }
   );
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: toolDefinitions }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    console.error(`[tools/list] returning ${toolDefinitions.length} tools: ${toolDefinitions.map(t => t.name).join(', ')}`);
+    return { tools: toolDefinitions };
+  });
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     try {
@@ -62,6 +65,14 @@ function buildServer() {
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Log every incoming request so Railway's log view shows real traffic,
+// not just startup messages. Helpful for diagnosing whether Claude is
+// actually reaching this server during connect/refresh actions.
+app.use((req, res, next) => {
+  console.error(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  next();
+});
 
 registerOAuthRoutes(app, { baseUrl: BASE_URL });
 
