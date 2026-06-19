@@ -135,7 +135,8 @@ export function registerOAuthRoutes(app, { baseUrl }) {
     `);
   });
 
-  app.use('/oauth/authorize', expressUrlencodedFallback());
+  // Note: req.body for this POST is parsed by the global express.urlencoded()
+  // middleware in index.js, since this form posts as application/x-www-form-urlencoded.
 
   app.post('/oauth/authorize', (req, res) => {
     const { client_id, redirect_uri, state, code_challenge, code_challenge_method, decision } = req.body;
@@ -253,18 +254,4 @@ export function validateAccessToken(req) {
 
 function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-// express.json() doesn't parse form posts; the /oauth/authorize POST from
-// our own approve-page form needs urlencoded parsing specifically.
-function expressUrlencodedFallback() {
-  return async (req, res, next) => {
-    if (req.method !== 'POST') { next(); return; }
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
-      req.body = Object.fromEntries(new URLSearchParams(body));
-      next();
-    });
-  };
 }

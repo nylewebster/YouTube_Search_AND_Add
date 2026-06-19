@@ -61,6 +61,7 @@ function buildServer() {
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 registerOAuthRoutes(app, { baseUrl: BASE_URL });
 
