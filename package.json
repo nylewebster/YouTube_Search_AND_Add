@@ -1,0 +1,20 @@
+{
+  "name": "youtube-mcp-server",
+  "version": "2.0.0",
+  "description": "MCP server for searching YouTube and adding results to playlists (HTTP transport for remote/mobile access)",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "start:local": "node src/index-stdio.js",
+    "auth": "node src/authorize.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.2",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2"
+  }
+}
