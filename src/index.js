@@ -27,6 +27,9 @@ import { createYouTubeClient, toolDefinitions, handleToolCall } from './youtube-
 import { registerOAuthRoutes, validateAccessToken } from './oauth.js';
 import { transcriptTestToolDefinition, handleTranscriptTest } from './transcript-test.js';
 
+console.error('[startup] toolDefinitions imported:', Array.isArray(toolDefinitions), toolDefinitions?.length);
+console.error('[startup] transcriptTestToolDefinition imported:', typeof transcriptTestToolDefinition, transcriptTestToolDefinition?.name);
+
 const PORT = process.env.PORT || 3000;
 
 // BASE_URL must be your actual public Railway URL (e.g.
@@ -48,6 +51,7 @@ function buildServer() {
     { capabilities: { tools: {} } }
   );
   const allTools = [...toolDefinitions, transcriptTestToolDefinition];
+  console.error('[buildServer] allTools constructed with length:', allTools.length, 'names:', allTools.map(t => t?.name));
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     console.error(`[tools/list] returning ${allTools.length} tools: ${allTools.map(t => t.name).join(', ')}`);
     return { tools: allTools };
