@@ -9,6 +9,37 @@
  * able to fall back to metadata-only summarization if this throws.
  */
 import { fetchTranscript } from 'youtube-transcript-plus';
+import fs from 'node:fs';
+
+/**
+ * Builds a raw `Cookie:` header string from the same cookies.txt this
+ * server already decodes for yt-dlp (see YTDLP_COOKIES_FILE / index.js).
+ * Reusing it here means the captions path benefits from the same
+ * "looks like a real logged-in browser" signal, with no new cookie
+ * export/rotation process to maintain.
+ *
+ * Fails soft: returns null if the file is missing or unreadable, so
+ * callers can fall back to an uncookied request rather than throwing.
+ */
+function loadCookieHeader() {
+  const cookiesPath = process.env.YTDLP_COOKIES_FILE;
+  if (!cookiesPath) return null;
+  try {
+    const raw = fs.readFileSync(cookiesPath, 'utf-8');
+    return raw
+      .split('\n')
+      .filter(line => line.trim() && !line.startsWith('#'))
+      .map(line => {
+        const parts = line.split('\t');
+        return `${parts[5]}=${parts[6]}`;
+      })
+      .filter(pair => pair && !pair.startsWith('undefined'))
+      .join('; ');
+  } catch (err) {
+    console.error(`[transcript-client] could not read cookies file for captions request: ${err.message}`);
+    return null;
+  }
+}
 
 /**
  * Fetches a transcript and groups it into timestamped chunks, so long
@@ -19,7 +50,19 @@ import { fetchTranscript } from 'youtube-transcript-plus';
  */
 export async function getChunkedTranscript(videoId, chunkSeconds = 600) {
   try {
-    const segments = await fetchTranscript(videoId);
+    const cookieHeader = loadCookieHeader();
+    const fetchOptions = cookieHeader
+      ? {
+          videoFetch: async ({ url, lang, userAgent }) =>
+            fetch(url, { headers: { ...(lang && { 'Accept-Language': lang }), 'User-Agent': userAgent, Cookie: cookieHeader } }),
+          playerFetch: async ({ url, method, body, headers, lang, userAgent }) =>
+            fetch(url, { method, headers: { ...(lang && { 'Accept-Language': lang }), 'User-Agent': userAgent, Cookie: cookieHeader, ...headers }, body }),
+          transcriptFetch: async ({ url, lang, userAgent }) =>
+            fetch(url, { headers: { ...(lang && { 'Accept-Language': lang }), 'User-Agent': userAgent, Cookie: cookieHeader } }),
+        }
+      : undefined;
+
+    const segments = await fetchTranscript(videoId, fetchOptions);
     return chunkSegments(segments, chunkSeconds);
   } catch (err) {
     console.error(`[transcript-client] captions fetch failed for ${videoId}: name=${err.name} message=${err.message || String(err)}`);
