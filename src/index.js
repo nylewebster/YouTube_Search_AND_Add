@@ -38,6 +38,8 @@ if (!BASE_URL) {
   console.error('FATAL: BASE_URL is not set. Set it to this server\'s public URL, e.g.');
   console.error('  https://youtubesearchandadd-production.up.railway.app');
   process.exit(1);
+}
+
 const yt = createYouTubeClient();
 if (!process.env.OPENAI_API_KEY) {
   console.error('WARNING: OPENAI_API_KEY is not set. The Whisper transcript fallback will be skipped');
