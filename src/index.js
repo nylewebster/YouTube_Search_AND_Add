@@ -24,6 +24,7 @@ import {
   isInitializeRequest
 } from '@modelcontextprotocol/sdk/types.js';
 import { createYouTubeClient, toolDefinitions, handleToolCall } from './youtube-tools.js';
+import fs from 'node:fs';
 import { registerOAuthRoutes, validateAccessToken } from './oauth.js';
 
 const PORT = process.env.PORT || 3000;
@@ -37,6 +38,18 @@ if (!BASE_URL) {
   console.error('FATAL: BASE_URL is not set. Set it to this server\'s public URL, e.g.');
   console.error('  https://youtubesearchandadd-production.up.railway.app');
   process.exit(1);
+const yt = createYouTubeClient();
+if (!process.env.OPENAI_API_KEY) {
+  console.error('WARNING: OPENAI_API_KEY is not set. The Whisper transcript fallback will be skipped');
+  console.error('whenever YouTube captions are unavailable — summaries will drop to metadata-only instead.');
+}
+
+if (process.env.YTDLP_COOKIES_B64) {
+  fs.writeFileSync('/tmp/cookies.txt', Buffer.from(process.env.YTDLP_COOKIES_B64, 'base64'));
+  console.log('Decoded YTDLP_COOKIES_B64 to /tmp/cookies.txt');
+}
+
+function buildServer() {
 }
 
 const yt = createYouTubeClient();
