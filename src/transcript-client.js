@@ -18,8 +18,13 @@ import { fetchTranscript } from 'youtube-transcript-plus';
  * new chunk.
  */
 export async function getChunkedTranscript(videoId, chunkSeconds = 600) {
-  const segments = await fetchTranscript(videoId);
-  return chunkSegments(segments, chunkSeconds);
+  try {
+    const segments = await fetchTranscript(videoId);
+    return chunkSegments(segments, chunkSeconds);
+  } catch (err) {
+    console.error(`[transcript-client] captions fetch failed for ${videoId}: name=${err.name} message=${err.message || String(err)}`);
+    throw err;
+  }
 }
 
 /**

@@ -63,7 +63,13 @@ async function downloadAudio(videoId) {
   const args = [
     '-x',
     '--audio-format', 'mp3',
-    '--audio-quality', '5', // ~64kbps VBR — small files, plenty for speech
+    // q:a 8 ~= 85kbps VBR. NOTE: q:a 5 (the previous setting) is actually
+    // ~130kbps, not ~64kbps as originally assumed here — at that bitrate,
+    // anything over ~26 min exceeds OpenAI's 25MB limit even though it's
+    // well inside the 30-min MAX_DURATION_SECONDS default, wasting a full
+    // download before failing on size. q:a 8 keeps a full 30-min video
+    // comfortably under 19MB instead.
+    '--audio-quality', '8',
     '--match-filter', `duration <= ${MAX_DURATION_SECONDS}`,
     '--no-playlist',
     '-o', outputTemplate
