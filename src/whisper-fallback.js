@@ -35,6 +35,13 @@ const MAX_AUDIO_BYTES = 25 * 1024 * 1024; // OpenAI's hard per-file upload limit
 // Cloud audio download + transcription of multi-hour videos is slow and
 // expensive; cap it by default and let the deployment raise this deliberately.
 const MAX_DURATION_SECONDS = parseInt(process.env.WHISPER_MAX_DURATION_SECONDS || '1800', 10);
+// How long the yt-dlp child process itself is allowed to run before Node
+// kills it. This is separate from MAX_DURATION_SECONDS above — that cap
+// decides whether a download is attempted at all (based on the video's
+// length); this one decides how long the actual download is allowed to
+// take once it's running, which scales with network speed and video
+// length and can genuinely exceed a short default on long videos.
+const DOWNLOAD_TIMEOUT_MS = parseInt(process.env.WHISPER_DOWNLOAD_TIMEOUT_MS || '1200000', 10); // 20 min default
 
 export function whisperFallbackAvailable() {
   return Boolean(OPENAI_API_KEY);
@@ -70,15 +77,18 @@ async function downloadAudio(videoId) {
   try {
     const result = await execFileAsync('yt-dlp', args, {
       maxBuffer: 1024 * 1024 * 10,
-      timeout: 5 * 60 * 1000
+      timeout: DOWNLOAD_TIMEOUT_MS
     });
     stdout = result.stdout;
     stderr = result.stderr;
   } catch (err) {
     await rm(dir, { recursive: true, force: true });
     if (err.killed) {
-      console.error(`[whisper-fallback] yt-dlp timed out for video ${videoId}`);
-      throw new Error('yt-dlp timed out downloading audio (video may be too long, or the network is slow).');
+      console.error(`[whisper-fallback] yt-dlp timed out after ${DOWNLOAD_TIMEOUT_MS}ms for video ${videoId}`);
+      throw new Error(
+        `yt-dlp timed out after ${Math.round(DOWNLOAD_TIMEOUT_MS / 1000)}s downloading audio ` +
+        `(set WHISPER_DOWNLOAD_TIMEOUT_MS to raise it, or the video may be too long for synchronous processing).`
+      );
     }
     if (/does not pass filter/i.test(err.stderr || '')) {
       console.error(`[whisper-fallback] video ${videoId} exceeds duration cap (${MAX_DURATION_SECONDS}s)`);
