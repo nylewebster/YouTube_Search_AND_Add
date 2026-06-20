@@ -77,8 +77,10 @@ function buildSapisidHash(cookieHeader, origin) {
 export async function getChunkedTranscript(videoId, chunkSeconds = 600) {
   try {
     const cookieHeader = loadCookieHeader();
+    console.error(`[transcript-client] DEBUG: cookieHeader present=${!!cookieHeader} length=${cookieHeader?.length || 0}`);
     const origin = 'https://www.youtube.com';
     const authHeader = cookieHeader ? buildSapisidHash(cookieHeader, origin) : null;
+    console.error(`[transcript-client] DEBUG: authHeader present=${!!authHeader}`);
 
     const fetchOptions = cookieHeader
       ? {
