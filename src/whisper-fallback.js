@@ -187,8 +187,8 @@ export async function getChunkedTranscriptViaWhisper(videoId, chunkSeconds = 600
   try {
     const result = await transcribeAudio(filePath);
     const segments = (result.segments || []).map(seg => ({
-      offset: seg.start * 1000,
-      duration: Math.max(0, (seg.end - seg.start)) * 1000,
+      offset: seg.start,
+      duration: Math.max(0, seg.end - seg.start),
       text: seg.text
     }));
     console.error(`[whisper-fallback] video ${videoId} done — ${segments.length} segments`);

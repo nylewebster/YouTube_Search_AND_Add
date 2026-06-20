@@ -29,11 +29,13 @@ export async function getChunkedTranscript(videoId, chunkSeconds = 600) {
 
 /**
  * Groups a flat array of {offset, duration, text} segments (offset/duration
- * in milliseconds) into timestamped chunks. Factored out of
- * getChunkedTranscript() so the Whisper fallback (whisper-fallback.js) can
- * produce identically-shaped output from a completely different segment
- * source (OpenAI's API instead of youtube-transcript-plus), letting callers
- * treat both transcript sources interchangeably.
+ * in SECONDS — this matches youtube-transcript-plus's native units, see
+ * https://www.npmjs.com/package/youtube-transcript-plus) into timestamped
+ * chunks. Factored out of getChunkedTranscript() so the Whisper fallback
+ * (whisper-fallback.js) can produce identically-shaped output from a
+ * completely different segment source (OpenAI's API instead of
+ * youtube-transcript-plus, which also natively uses seconds), letting
+ * callers treat both transcript sources interchangeably.
  */
 export function chunkSegments(segments, chunkSeconds = 600) {
   if (!segments.length) {
@@ -44,7 +46,7 @@ export function chunkSegments(segments, chunkSeconds = 600) {
   let current = { startSeconds: 0, text: [] };
 
   for (const seg of segments) {
-    const segStart = seg.offset / 1000;
+    const segStart = seg.offset;
     if (segStart - current.startSeconds >= chunkSeconds && current.text.length) {
       chunks.push(finalizeChunk(current));
       current = { startSeconds: segStart, text: [] };
@@ -55,7 +57,7 @@ export function chunkSegments(segments, chunkSeconds = 600) {
 
   const totalWords = chunks.reduce((sum, c) => sum + c.wordCount, 0);
   const lastSeg = segments[segments.length - 1];
-  const totalDurationSeconds = lastSeg.offset / 1000 + (lastSeg.duration || 0) / 1000;
+  const totalDurationSeconds = lastSeg.offset + (lastSeg.duration || 0);
 
   return { chunks, totalWords, totalDurationSeconds };
 }
