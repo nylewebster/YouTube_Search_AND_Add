@@ -11,6 +11,7 @@
 import { fetchTranscript } from 'youtube-transcript-plus';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
+console.error(`[transcript-client] MODULE LOADED — cookie+debug version — ${new Date().toISOString()}`);
 
 /**
  * Builds a raw `Cookie:` header string from the same cookies.txt this
