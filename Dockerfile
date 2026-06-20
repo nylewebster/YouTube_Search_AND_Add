@@ -12,11 +12,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       curl \
     && rm -rf /var/lib/apt/lists/*
 
-# yt-dlp as a standalone binary, not via pip — avoids pulling in Python
-# just for this one tool. This always grabs whatever is "latest" at build
-# time; if YouTube changes break downloads, redeploy to pick up a newer
-# build, or pin to a specific release tag here.
-RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
+# yt-dlp as a standalone binary — specifically yt-dlp_linux, the
+# PyInstaller-bundled build with Python embedded inside it. The plain
+# "yt-dlp" release asset is a Python zipapp (shebang #!/usr/bin/env
+# python3) and FAILS on this Python-less base image with
+# "python3: No such file or directory" — yt-dlp_linux avoids that
+# entirely by not depending on a system Python at all.
+RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /usr/local/bin/yt-dlp \
     && chmod a+rx /usr/local/bin/yt-dlp
 
 WORKDIR /app
