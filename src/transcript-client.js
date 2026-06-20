@@ -10,6 +10,7 @@
  */
 import { fetchTranscript } from 'youtube-transcript-plus';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 
 /**
  * Builds a raw `Cookie:` header string from the same cookies.txt this
@@ -42,6 +43,31 @@ function loadCookieHeader() {
 }
 
 /**
+ * Pulls a single named cookie's value out of a `name=value; name=value`
+ * style cookie header string. Used to grab SAPISID specifically, since
+ * that's the one needed to compute the auth hash below.
+ */
+function extractCookieValue(cookieHeader, name) {
+  const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
+  return match ? match[1] : null;
+}
+
+/**
+ * Generates the `Authorization: SAPISIDHASH <ts>_<hash>` header Google's
+ * Innertube API requires to actually trust a cookie as an authenticated
+ * session, rather than silently treating the request as anonymous (which
+ * is what happens if you send cookies alone, with no error — exactly the
+ * failure mode this was added to fix). Algorithm: sha1("<unix_ts> <SAPISID> <origin>").
+ */
+function buildSapisidHash(cookieHeader, origin) {
+  const sapisid = extractCookieValue(cookieHeader, 'SAPISID') || extractCookieValue(cookieHeader, '__Secure-3PAPISID');
+  if (!sapisid) return null;
+  const timestamp = Math.floor(Date.now() / 1000);
+  const hash = createHash('sha1').update(`${timestamp} ${sapisid} ${origin}`).digest('hex');
+  return `SAPISIDHASH ${timestamp}_${hash}`;
+}
+
+/**
  * Fetches a transcript and groups it into timestamped chunks, so long
  * videos (multi-hour podcasts) produce a structured, navigable result
  * instead of one giant wall of text. Chunk boundaries are approximate —
@@ -51,12 +77,25 @@ function loadCookieHeader() {
 export async function getChunkedTranscript(videoId, chunkSeconds = 600) {
   try {
     const cookieHeader = loadCookieHeader();
+    const origin = 'https://www.youtube.com';
+    const authHeader = cookieHeader ? buildSapisidHash(cookieHeader, origin) : null;
+
     const fetchOptions = cookieHeader
       ? {
           videoFetch: async ({ url, lang, userAgent }) =>
             fetch(url, { headers: { ...(lang && { 'Accept-Language': lang }), 'User-Agent': userAgent, Cookie: cookieHeader } }),
           playerFetch: async ({ url, method, body, headers, lang, userAgent }) =>
-            fetch(url, { method, headers: { ...(lang && { 'Accept-Language': lang }), 'User-Agent': userAgent, Cookie: cookieHeader, ...headers }, body }),
+            fetch(url, {
+              method,
+              headers: {
+                ...(lang && { 'Accept-Language': lang }),
+                'User-Agent': userAgent,
+                Cookie: cookieHeader,
+                ...(authHeader && { Authorization: authHeader, 'X-Origin': origin }),
+                ...headers,
+              },
+              body,
+            }),
           transcriptFetch: async ({ url, lang, userAgent }) =>
             fetch(url, { headers: { ...(lang && { 'Accept-Language': lang }), 'User-Agent': userAgent, Cookie: cookieHeader } }),
         }
