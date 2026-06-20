@@ -30,6 +30,7 @@ function loadCookieHeader() {
     const raw = fs.readFileSync(cookiesPath, 'utf-8');
     return raw
       .split('\n')
+      .map(line => line.replace(/\r$/, ''))
       .filter(line => line.trim() && !line.startsWith('#'))
       .map(line => {
         const parts = line.split('\t');
