@@ -269,7 +269,7 @@ export async function handleToolCall(yt, name, args) {
 
           const allowWhisper = args.allowWhisperFallback !== false;
           if (allowWhisper && whisperFallbackAvailable()) {
-            console.error(`[youtube_summarize_video] captions failed for ${videoId} (${transcriptError.classification}), trying Whisper fallback`);
+            console.error(`[youtube_summarize_video] captions failed for ${videoId} (${transcriptError.classification}): ${transcriptError.message}, trying Whisper fallback`);
             try {
               const { chunks, totalWords, totalDurationSeconds } = await getChunkedTranscriptViaWhisper(videoId, chunkSeconds);
               transcriptResult = { chunks, totalWords, totalDurationSeconds, chunkCount: chunks.length };
