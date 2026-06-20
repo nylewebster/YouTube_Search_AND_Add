@@ -182,6 +182,7 @@ That's the entire minimum setup. The `Dockerfile` already installs
 |---|---|---|
 | `WHISPER_MODEL` | `whisper-1` | The OpenAI model used for transcription. Leave this as-is — it's currently the only OpenAI transcription model that returns the segment-level timestamps this server needs to chunk long transcripts. |
 | `WHISPER_MAX_DURATION_SECONDS` | `1800` (30 min) | Videos longer than this are rejected before downloading, to avoid large OpenAI bills and slow requests. Raise it if you regularly summarize longer videos and are fine with the cost/time tradeoff. |
+| `WHISPER_DOWNLOAD_TIMEOUT_MS` | `1200000` (20 min) | How long the `yt-dlp` download itself is allowed to run before being killed — separate from the duration cap above, which only decides whether a download is attempted. Long videos or a slow connection can need more than the default. |
 | `YTDLP_COOKIES_FILE` | unset | Path to a `cookies.txt` file (exported from a real logged-in browser session) that `yt-dlp` uses to look like an authenticated browser request. See the caveat below. |
 
 ### Known risk: YouTube may block downloads from Railway
