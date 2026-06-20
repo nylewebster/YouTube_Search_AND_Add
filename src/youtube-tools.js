@@ -130,6 +130,11 @@ export const toolDefinitions = [
         allowWhisperFallback: {
           type: 'boolean',
           description: 'If unofficial captions fail, fall back to downloading audio and transcribing it with OpenAI Whisper (default true). This costs money and is slower — set false to skip straight to metadata-only on caption failure.'
+        },
+        transcriptMode: {
+          type: 'string',
+          enum: ['auto', 'whisper'],
+          description: '"auto" (default): try YouTube captions first, fall back to Whisper only if they fail. "whisper": skip the captions attempt entirely and force Whisper transcription, regardless of whether captions are available. Useful for testing the Whisper path deliberately, or when you specifically want Whisper\'s transcription over YouTube\'s auto-captions.'
         }
       },
       required: []
@@ -234,7 +239,24 @@ export async function handleToolCall(yt, name, args) {
       let transcriptError = null;
       let transcriptSource = null;
 
-      if (wantsTranscript) {
+      if (wantsTranscript && args.transcriptMode === 'whisper') {
+        if (!whisperFallbackAvailable()) {
+          transcriptError = {
+            classification: 'whisper_unavailable',
+            message: 'transcriptMode is "whisper" but OPENAI_API_KEY is not set on the server.'
+          };
+        } else {
+          console.error(`[youtube_summarize_video] transcriptMode=whisper for ${videoId}, skipping captions entirely`);
+          try {
+            const { chunks, totalWords, totalDurationSeconds } = await getChunkedTranscriptViaWhisper(videoId, chunkSeconds);
+            transcriptResult = { chunks, totalWords, totalDurationSeconds, chunkCount: chunks.length };
+            transcriptSource = 'whisper_fallback';
+          } catch (whisperErr) {
+            console.error(`[youtube_summarize_video] forced Whisper failed for ${videoId}: ${whisperErr.message}`);
+            transcriptError = { classification: 'whisper_failed', message: whisperErr.message || String(whisperErr) };
+          }
+        }
+      } else if (wantsTranscript) {
         try {
           const { chunks, totalWords, totalDurationSeconds } = await getChunkedTranscript(videoId, chunkSeconds);
           transcriptResult = { chunks, totalWords, totalDurationSeconds, chunkCount: chunks.length };
