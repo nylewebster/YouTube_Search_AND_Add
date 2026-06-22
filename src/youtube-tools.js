@@ -141,6 +141,38 @@ export const toolDefinitions = [
     }
   },
   {
+    name: 'youtube_get_comments',
+    description:
+      'Get top-level comments for a video — useful for gauging audience reaction, sentiment, or ' +
+      'common questions/complaints (e.g. "what are people saying about this video"). Returns only ' +
+      'top-level comments, not nested replies. Identify the video either by videoId directly, or by ' +
+      'playlistName + position, same as youtube_summarize_video.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        videoId: { type: 'string', description: 'YouTube video ID to fetch comments for' },
+        playlistName: {
+          type: 'string',
+          description: 'Playlist to pull the video from, if not specifying videoId directly'
+        },
+        position: {
+          type: 'integer',
+          description: '1-based position within the playlist (1 = first video). Used with playlistName.'
+        },
+        maxResults: {
+          type: 'integer',
+          description: 'Number of top-level comments to fetch, 1-100 (default 20)'
+        },
+        order: {
+          type: 'string',
+          enum: ['relevance', 'time'],
+          description: '"relevance" = YouTube\'s "Top comments" sort (default). "time" = newest first.'
+        }
+      },
+      required: []
+    }
+  },
+  {
     name: 'youtube_create_playlist',
     description: 'Create a new YouTube playlist.',
     inputSchema: {
@@ -230,6 +262,35 @@ export async function handleToolCall(yt, name, args) {
         videoId = item.videoId;
         playlistContext = { playlistTitle: playlist.title, position: pos + 1, totalItems: items.length };
       }
+
+      case 'youtube_get_comments': {
+      let videoId = args.videoId;
+      let playlistContext = null;
+
+      if (!videoId) {
+        if (!args.playlistName) {
+          throw new Error('Provide either videoId, or playlistName (with optional position).');
+        }
+        const playlist = await resolvePlaylistId(yt, args.playlistName);
+        const items = await yt.getPlaylistItems(playlist.id);
+        if (!items.length) {
+          throw new Error(`Playlist "${playlist.title}" has no videos.`);
+        }
+        const pos = (args.position || 1) - 1;
+        const item = items[pos];
+        if (!item) {
+          throw new Error(`Playlist "${playlist.title}" has ${items.length} video(s); position ${args.position} is out of range.`);
+        }
+        videoId = item.videoId;
+        playlistContext = { playlistTitle: playlist.title, position: pos + 1, totalItems: items.length };
+      }
+
+      const comments = await yt.getVideoComments(videoId, args.maxResults || 20, args.order || 'relevance');
+      return [{
+        type: 'text',
+        text: JSON.stringify({ videoId, playlistContext, commentCount: comments.length, comments }, null, 2)
+      }];
+    }
 
       const details = await yt.getVideoDetails(videoId);
       const wantsTranscript = args.includeTranscript !== false;
