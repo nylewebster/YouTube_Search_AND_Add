@@ -263,35 +263,6 @@ export async function handleToolCall(yt, name, args) {
         playlistContext = { playlistTitle: playlist.title, position: pos + 1, totalItems: items.length };
       }
 
-      case 'youtube_get_comments': {
-      let videoId = args.videoId;
-      let playlistContext = null;
-
-      if (!videoId) {
-        if (!args.playlistName) {
-          throw new Error('Provide either videoId, or playlistName (with optional position).');
-        }
-        const playlist = await resolvePlaylistId(yt, args.playlistName);
-        const items = await yt.getPlaylistItems(playlist.id);
-        if (!items.length) {
-          throw new Error(`Playlist "${playlist.title}" has no videos.`);
-        }
-        const pos = (args.position || 1) - 1;
-        const item = items[pos];
-        if (!item) {
-          throw new Error(`Playlist "${playlist.title}" has ${items.length} video(s); position ${args.position} is out of range.`);
-        }
-        videoId = item.videoId;
-        playlistContext = { playlistTitle: playlist.title, position: pos + 1, totalItems: items.length };
-      }
-
-      const comments = await yt.getVideoComments(videoId, args.maxResults || 20, args.order || 'relevance');
-      return [{
-        type: 'text',
-        text: JSON.stringify({ videoId, playlistContext, commentCount: comments.length, comments }, null, 2)
-      }];
-    }
-
       const details = await yt.getVideoDetails(videoId);
       const wantsTranscript = args.includeTranscript !== false;
       const chunkSeconds = (args.chunkMinutes || 10) * 60;
@@ -391,6 +362,35 @@ export async function handleToolCall(yt, name, args) {
               `content beyond what's in the description.`
             : `Transcript fetch was skipped (includeTranscript=false). This summary is metadata-only.`
         }, null, 2)
+      }];
+    }
+
+    case 'youtube_get_comments': {
+      let videoId = args.videoId;
+      let playlistContext = null;
+
+      if (!videoId) {
+        if (!args.playlistName) {
+          throw new Error('Provide either videoId, or playlistName (with optional position).');
+        }
+        const playlist = await resolvePlaylistId(yt, args.playlistName);
+        const items = await yt.getPlaylistItems(playlist.id);
+        if (!items.length) {
+          throw new Error(`Playlist "${playlist.title}" has no videos.`);
+        }
+        const pos = (args.position || 1) - 1;
+        const item = items[pos];
+        if (!item) {
+          throw new Error(`Playlist "${playlist.title}" has ${items.length} video(s); position ${args.position} is out of range.`);
+        }
+        videoId = item.videoId;
+        playlistContext = { playlistTitle: playlist.title, position: pos + 1, totalItems: items.length };
+      }
+
+      const comments = await yt.getVideoComments(videoId, args.maxResults || 20, args.order || 'relevance');
+      return [{
+        type: 'text',
+        text: JSON.stringify({ videoId, playlistContext, commentCount: comments.length, comments }, null, 2)
       }];
     }
 
