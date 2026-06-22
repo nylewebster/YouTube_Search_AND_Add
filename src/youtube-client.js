@@ -167,6 +167,32 @@ export class YouTubeClient {
     };
   }
 
+  /**
+   * Get top-level comments for a video. Note: this only returns top-level
+   * comments, not nested replies — fetching full reply threads would need
+   * a separate call per comment via the `replies` part, which isn't worth
+   * the extra API quota unless a caller specifically needs it.
+   */
+  async getVideoComments(videoId, maxResults = 20, order = 'relevance') {
+    const data = await this._get('commentThreads', {
+      part: 'snippet',
+      videoId,
+      maxResults: Math.min(Math.max(maxResults, 1), 100),
+      order, // 'relevance' (YouTube's "top comments") or 'time' (newest first)
+      textFormat: 'plainText'
+    });
+    return (data.items || []).map(item => {
+      const top = item.snippet.topLevelComment.snippet;
+      return {
+        author: top.authorDisplayName,
+        text: top.textDisplay,
+        likeCount: top.likeCount,
+        publishedAt: top.publishedAt,
+        replyCount: item.snippet.totalReplyCount
+      };
+    });
+  }
+
   /** Create a new playlist. */
   async createPlaylist(title, description = '', privacyStatus = 'private') {
     const data = await this._post('playlists', { part: 'snippet,status' }, {
