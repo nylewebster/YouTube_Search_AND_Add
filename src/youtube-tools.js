@@ -173,6 +173,32 @@ export const toolDefinitions = [
     }
   },
   {
+    name: 'youtube_smart_search_and_add',
+    description:
+      'Like youtube_search_and_add, but with an LLM-judged refinement loop: after searching, ' +
+      'Claude checks whether the results actually match your stated goal, and if not, ' +
+      'automatically retries with a better query (up to maxAttempts times) before adding ' +
+      'anything to the playlist. Use this when a plain keyword search risks pulling irrelevant ' +
+      'results (e.g. broad/generic terms that could match unrelated content). Requires ' +
+      'ANTHROPIC_API_KEY on the server — falls back to a single plain search if unset.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Initial YouTube search query' },
+        goal: {
+          type: 'string',
+          description: 'Plain-language description of what counts as a relevant result, used for judgment (e.g. "driving technique tips specifically for The Cutting corner at Mount Panorama")'
+        },
+        count: { type: 'integer', description: `Number of top results to add (default ${DEFAULT_RESULT_COUNT})` },
+        playlistName: { type: 'string', description: `Playlist name to add to (default "${DEFAULT_PLAYLIST_NAME}")` },
+        maxAttempts: { type: 'integer', description: 'Max refinement attempts before giving up and using the best query tried (default 3)' },
+        order: { type: 'string', enum: ['relevance', 'date', 'viewCount', 'rating'] },
+        skipDuplicates: { type: 'boolean' }
+      },
+      required: ['query', 'goal']
+    }
+  },
+  {
     name: 'youtube_create_playlist',
     description: 'Create a new YouTube playlist.',
     inputSchema: {
