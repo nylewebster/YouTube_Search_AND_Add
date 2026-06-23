@@ -6,6 +6,7 @@
 import { YouTubeClient } from './youtube-client.js';
 import { getChunkedTranscript, classifyTranscriptError } from './transcript-client.js';
 import { getChunkedTranscriptViaWhisper, whisperFallbackAvailable } from './whisper-fallback.js';
+import { smartSearch, refinerAvailable } from './query-refiner.js';
 
 const DEFAULT_PLAYLIST_NAME = process.env.DEFAULT_PLAYLIST_NAME || 'Using Claude AI';
 const DEFAULT_RESULT_COUNT = parseInt(process.env.DEFAULT_RESULT_COUNT || '10', 10);
@@ -417,6 +418,47 @@ export async function handleToolCall(yt, name, args) {
       return [{
         type: 'text',
         text: JSON.stringify({ videoId, playlistContext, commentCount: comments.length, comments }, null, 2)
+      }];
+    }
+
+    case 'youtube_smart_search_and_add': {
+      const playlist = await resolvePlaylistId(yt, args.playlistName);
+      let results, attempts, finalQuery;
+
+      if (refinerAvailable()) {
+        ({ results, attempts, finalQuery } = await smartSearch(yt, {
+          query: args.query,
+          goal: args.goal,
+          count: args.count || DEFAULT_RESULT_COUNT,
+          order: args.order || 'relevance',
+          maxAttempts: args.maxAttempts || 3
+        }));
+      } else {
+        results = await yt.search(args.query, args.count || DEFAULT_RESULT_COUNT, args.order || 'relevance');
+        attempts = [{ query: args.query, note: 'ANTHROPIC_API_KEY not set — refinement skipped, plain search used.' }];
+        finalQuery = args.query;
+      }
+
+      const { results: addResults, summary } = await yt.addVideosToPlaylist(
+        playlist.id,
+        results.map(r => r.videoId),
+        { skipDuplicates: args.skipDuplicates !== false }
+      );
+      const enriched = results.map(r => ({
+        ...r,
+        status: addResults.find(a => a.videoId === r.videoId)?.status
+      }));
+
+      return [{
+        type: 'text',
+        text: JSON.stringify({
+          playlist: playlist.title,
+          goal: args.goal,
+          finalQuery,
+          refinementAttempts: attempts,
+          summary,
+          videos: enriched
+        }, null, 2)
       }];
     }
 
