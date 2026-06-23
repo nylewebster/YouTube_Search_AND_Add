@@ -49,8 +49,9 @@ async function judgeResults(goal, query, results) {
   if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
 
   const text = data.content?.[0]?.text || '';
+  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
   try {
-    return JSON.parse(text.trim());
+    return JSON.parse(cleaned);
   } catch {
     // Fail soft: if Claude doesn't return clean JSON, treat as "good enough"
     // rather than crashing the whole search.
