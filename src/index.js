@@ -23,7 +23,8 @@ import {
   ListToolsRequestSchema,
   isInitializeRequest
 } from '@modelcontextprotocol/sdk/types.js';
-import { createYouTubeClient, toolDefinitions, handleToolCall } from './youtube-tools.js';
+import { createYouTubeClient, toolDefinitions as ytToolDefinitions, handleToolCall as handleYtToolCall } from './youtube-tools.js';
+import { createStackExchangeClient, toolDefinitions as seToolDefinitions, handleToolCall as handleSeToolCall } from './stackexchange-tools.js';
 import fs from 'node:fs';
 import { registerOAuthRoutes, validateAccessToken } from './oauth.js';
 
@@ -41,9 +42,21 @@ if (!BASE_URL) {
 }
 
 const yt = createYouTubeClient();
+const se = createStackExchangeClient();
+
+// Merge tool definitions from both sources, and keep a lookup set so the
+// call handler below knows which client/dispatcher to route each tool to.
+const allToolDefinitions = [...ytToolDefinitions, ...seToolDefinitions];
+const seToolNames = new Set(seToolDefinitions.map(t => t.name));
+
 if (!process.env.OPENAI_API_KEY) {
   console.error('WARNING: OPENAI_API_KEY is not set. The Whisper transcript fallback will be skipped');
   console.error('whenever YouTube captions are unavailable — summaries will drop to metadata-only instead.');
+}
+
+if (!process.env.STACKEXCHANGE_API_KEY) {
+  console.error('NOTE: STACKEXCHANGE_API_KEY is not set. Stack Exchange tools will work but are capped');
+  console.error('at 300 requests/day/IP instead of 10,000 — register a free key at stackapps.com if needed.');
 }
 
 if (process.env.YTDLP_COOKIES_B64) {
@@ -57,13 +70,15 @@ function buildServer() {
     { capabilities: { tools: {} } }
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    console.error(`[tools/list] returning ${toolDefinitions.length} tools: ${toolDefinitions.map(t => t.name).join(', ')}`);
-    return { tools: toolDefinitions };
+    console.error(`[tools/list] returning ${allToolDefinitions.length} tools: ${allToolDefinitions.map(t => t.name).join(', ')}`);
+    return { tools: allToolDefinitions };
   });
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     try {
-      const content = await handleToolCall(yt, name, args);
+      const content = seToolNames.has(name)
+        ? await handleSeToolCall(se, name, args)
+        : await handleYtToolCall(yt, name, args);
       return { content };
     } catch (err) {
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
