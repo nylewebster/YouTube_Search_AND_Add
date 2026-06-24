@@ -55,7 +55,11 @@ export function createStackExchangeClient() {
 
   return {
     async listSites({ limit = 100 } = {}) {
-      const data = await seFetch('/sites', { filter: '!*Mg4Pjg9LXr', pagesize: limit });
+      // No custom filter here on purpose — compiled SE filter strings are
+      // opaque IDs you can only get back from SE's /filters/create endpoint,
+      // they can't be hand-written. The default response already includes
+      // name/api_site_parameter/audience/site_url, so we just pick those out.
+      const data = await seFetch('/sites', { pagesize: limit });
       return data.items.map((s) => ({
         name: s.name,
         site: s.api_site_parameter,
