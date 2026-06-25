@@ -81,6 +81,10 @@ function buildServer() {
         : await handleYtToolCall(yt, name, args);
       return { content };
     } catch (err) {
+      // NOTE: added for debugging — logs the real error to Railway logs
+      // instead of letting it disappear silently. Safe to leave in
+      // permanently; it only writes to stderr.
+      console.error('[tools/call error]', name, err.stack || err.message);
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
     }
   });
@@ -153,6 +157,18 @@ app.delete('/mcp', requireAuth, async (req, res) => {
   if (!transport) { res.status(400).send('Invalid or missing session'); return; }
   await transport.handleRequest(req, res);
   delete sessions[sessionId];
+});
+
+// NOTE: added for debugging — these two handlers catch anything that
+// escapes every other try/catch in this file (e.g. a rejected promise
+// nobody awaited, or a synchronous throw inside SDK transport code).
+// Without these, that class of error fails completely silently — no log
+// line at all, which is what made the original bug hard to pin down.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err.stack || err.message);
 });
 
 app.listen(PORT, () => {
