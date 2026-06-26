@@ -292,19 +292,56 @@ export function burstTimingFlag(comment, buckets, medianBucketCount, bucketSecon
 }
 
 /**
- * Builds the full flags array for one comment, given the whole sample for
- * context (cluster/burst comparisons need the full set, not just one
- * comment in isolation). Precompute clusters/buckets once per video and
- * pass them in — see computeYouTubeIntegrityScore below — rather than
- * recomputing per comment.
+ * Builds the full flag detail array for one comment. Returns structured
+ * objects instead of bare numbers so callers can surface *why* a flag
+ * fired alongside the probability — both to help consumers interpret
+ * scores and to expose known false-positive modes explicitly:
+ *
+ *   - 'url_or_spam': fires on any URL, including the creator's own links
+ *     (confirmed false-positive mode: LTT pinned correction note with
+ *     https://shortlinus.com scored 0.4 — legitimate link, not spam).
+ *     Downstream consumers should treat this reason with extra skepticism
+ *     unless the URL points somewhere clearly unrelated to the channel.
+ *
+ *   - 'duplicate_text': distinctAuthors is included so consumers can see
+ *     whether "29 distinct humans independently saying the same thing on a
+ *     controversial video" is being conflated with "2 bot accounts posting
+ *     the same script." Both trigger the flag but at very different levels
+ *     of actual concern — distinctAuthors makes that visible without
+ *     requiring anyone to dig into raw cluster data.
+ *
+ * computeYouTubeIntegrityScore extracts just the probability values for
+ * the noisy-OR math; everything else is context for the output layer.
  */
 export function computeYouTubeCommentFlags(comment, { clusters, buckets, medianBucketCount }) {
-  return [
-    duplicateTextFlag(comment, clusters),
-    genericPhraseFlag(comment),
-    spamPatternFlag(comment),
-    burstTimingFlag(comment, buckets, medianBucketCount),
-  ].filter((p) => p > 0);
+  const details = [];
+
+  const dupProb = duplicateTextFlag(comment, clusters);
+  if (dupProb > 0) {
+    const key = normalizeCommentText(comment.text);
+    const distinctAuthors = key ? (clusters.get(key)?.size ?? 1) : 1;
+    details.push({ probability: dupProb, reason: 'duplicate_text', distinctAuthors });
+  }
+
+  const genProb = genericPhraseFlag(comment);
+  if (genProb > 0) {
+    details.push({ probability: genProb, reason: 'generic_phrase' });
+  }
+
+  const spamProb = spamPatternFlag(comment);
+  if (spamProb > 0) {
+    // Note false-positive risk: any URL triggers this, including legitimate
+    // creator links. Surfacing the reason lets the consumer decide how much
+    // weight to give it — don't treat 0.4 as "spam confirmed" on sight.
+    details.push({ probability: spamProb, reason: 'url_or_spam' });
+  }
+
+  const burstProb = burstTimingFlag(comment, buckets, medianBucketCount);
+  if (burstProb > 0) {
+    details.push({ probability: burstProb, reason: 'burst_timing' });
+  }
+
+  return details;
 }
 
 /**
@@ -313,19 +350,27 @@ export function computeYouTubeCommentFlags(comment, { clusters, buckets, medianB
  * dampening for thin samples, same noisy-OR convergence model, just fed
  * YouTube-specific flags instead of generic ones.
  * @param {Array<{ text: string, authorChannelId: string|null, author: string, publishedAt: string }>} comments
+ * @returns {{ integrityScore: number, sampleSize: number, perItemBotProbability: number[], perItemFlagDetails: object[][] }}
  */
 export function computeYouTubeIntegrityScore(comments) {
   const clusters = buildTextClusters(comments);
   const buckets = buildTimeBuckets(comments);
   const medianBucketCount = median([...buckets.values()]);
 
-  const items = comments.map((c) => ({
-    flags: computeYouTubeCommentFlags(c, { clusters, buckets, medianBucketCount }),
+  const perItemFlagDetails = comments.map((c) =>
+    computeYouTubeCommentFlags(c, { clusters, buckets, medianBucketCount })
+  );
+
+  const items = perItemFlagDetails.map((flagDetails) => ({
+    // computeIntegrityScore only needs the raw probability values for
+    // the noisy-OR math; the structured detail objects live alongside.
+    flags: flagDetails.map((f) => f.probability),
     // accountAgeDays intentionally omitted — see file header note above.
   }));
 
-  return computeIntegrityScore(items);
+  return { ...computeIntegrityScore(items), perItemFlagDetails };
 }
+
 
 // ---------------------------------------------------------------------
 // Client — composes existing service clients. No fetch() of its own.
@@ -435,11 +480,15 @@ export function createCredibilityClient({ stackExchangeClient, youtubeClient } =
         };
       }
 
-      const { integrityScore, sampleSize, perItemBotProbability } = computeYouTubeIntegrityScore(comments);
+      const { integrityScore, sampleSize, perItemBotProbability, perItemFlagDetails } = computeYouTubeIntegrityScore(comments);
 
       const annotated = comments.map((c, i) => ({
         ...c,
         botProbability: Math.round(perItemBotProbability[i] * 1000) / 1000,
+        // Only include flagDetails on comments that actually have flags —
+        // omitting it entirely on clean comments keeps the output readable
+        // for the common case (most comments in an organic section score 0).
+        ...(perItemFlagDetails[i].length > 0 && { flagDetails: perItemFlagDetails[i] }),
       }));
 
       return {
