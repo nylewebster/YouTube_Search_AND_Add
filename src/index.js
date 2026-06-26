@@ -44,7 +44,7 @@ if (!BASE_URL) {
 
 const yt = createYouTubeClient();
 const se = createStackExchangeClient();
-const cred = createCredibilityClient({ stackExchangeClient: se });
+const cred = createCredibilityClient({ stackExchangeClient: se, youtubeClient: yt });
 
 // Merge tool definitions from all sources, and build a name -> handler
 // lookup so the call handler below knows which client/dispatcher to route

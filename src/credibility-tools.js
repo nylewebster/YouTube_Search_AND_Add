@@ -159,12 +159,169 @@ export function computeStackExchangeAuthorityScore({ score, isAccepted, reputati
 }
 
 // ---------------------------------------------------------------------
+// YouTube comment integrity-lane heuristics — pure, no I/O. Each flag is
+// deliberately weak in isolation (see noisyOrCombine above): the point is
+// that convergence of several weak signals is what should move a score,
+// not any single one. None of these use account age — that's not
+// available without a channels.list call per unique commenter, which is
+// a deliberate cost decision deferred for now. ageModifier already
+// handles a missing age gracefully (no dampening, no penalty), so this
+// slots into computeIntegrityScore with zero changes there.
+// ---------------------------------------------------------------------
+
+function normalizeCommentText(text = '') {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const GENERIC_PHRASES = [
+  'great video', 'nice video', 'awesome video', 'good video', 'love this',
+  'love this video', 'first', 'amazing', 'so good', 'this is awesome',
+  'great content', 'keep it up', 'subscribed', 'underrated channel',
+];
+
+function isGenericPhrase(normalizedText) {
+  // Generic spam-style praise is short. A long comment that happens to
+  // contain "great video" mid-sentence is a different thing entirely and
+  // shouldn't trip this.
+  if (!normalizedText || normalizedText.split(' ').length > 6) return false;
+  return GENERIC_PHRASES.some((p) => normalizedText === p || normalizedText.includes(p));
+}
+
+const SPAM_PATTERNS = [
+  /https?:\/\//i,
+  /\bwww\./i,
+  /check (out )?my (channel|page|bio)/i,
+  /\bdm me\b/i,
+  /\bfollow (me|back)\b/i,
+  /\bfree (followers|subscribers|money)\b/i,
+];
+
+function hasSpamPattern(text = '') {
+  return SPAM_PATTERNS.some((re) => re.test(text));
+}
+
+/**
+ * Groups comments by normalized text, tracking how many DISTINCT authors
+ * posted each one — the actual bot-network signature is the same text
+ * from different accounts, not just a popular phrase repeated by one
+ * person across replies.
+ */
+export function buildTextClusters(comments) {
+  const clusters = new Map();
+  for (const c of comments) {
+    const key = normalizeCommentText(c.text);
+    if (!key) continue;
+    const distinctAuthors = clusters.get(key) ?? new Set();
+    distinctAuthors.add(c.authorChannelId ?? c.author);
+    clusters.set(key, distinctAuthors);
+  }
+  return clusters;
+}
+
+/**
+ * Duplicate-text flag: near-identical text from multiple distinct
+ * authors. A cluster of 1 (just this comment) is normal — flag stays 0.
+ * Growing distinct-author count compounds, capped well under 1.0 since
+ * this is one signal among several, not a standalone verdict.
+ */
+export function duplicateTextFlag(comment, clusters) {
+  const key = normalizeCommentText(comment.text);
+  if (!key) return 0;
+  const distinctAuthors = clusters.get(key)?.size ?? 1;
+  if (distinctAuthors <= 1) return 0;
+  return Math.min(0.75, 0.15 * Math.log2(distinctAuthors + 1) + 0.1);
+}
+
+/** Weak on its own — short, generic, context-free praise is common from real people too. */
+export function genericPhraseFlag(comment) {
+  return isGenericPhrase(normalizeCommentText(comment.text)) ? 0.12 : 0;
+}
+
+/** Moderate signal — URLs and self-promo patterns are a clearer tell than generic praise. */
+export function spamPatternFlag(comment) {
+  return hasSpamPattern(comment.text) ? 0.4 : 0;
+}
+
+/** Buckets comments by a fixed time window (default 60s) to find posting-rate spikes. */
+export function buildTimeBuckets(comments, bucketSeconds = 60) {
+  const buckets = new Map();
+  for (const c of comments) {
+    if (!c.publishedAt) continue;
+    const t = Math.floor(new Date(c.publishedAt).getTime() / 1000 / bucketSeconds);
+    buckets.set(t, (buckets.get(t) ?? 0) + 1);
+  }
+  return buckets;
+}
+
+function median(numbers) {
+  if (numbers.length === 0) return 0;
+  const sorted = [...numbers].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/**
+ * Burst-timing flag: this comment landed in a time bucket far denser than
+ * the video's own typical pacing. Relative to the sample's median bucket
+ * density, not an absolute threshold — a viral video's normal pace is a
+ * slow trickle's bot-network density, so "normal" has to be per-video.
+ */
+export function burstTimingFlag(comment, buckets, medianBucketCount, bucketSeconds = 60) {
+  if (!comment.publishedAt || medianBucketCount === 0) return 0;
+  const t = Math.floor(new Date(comment.publishedAt).getTime() / 1000 / bucketSeconds);
+  const count = buckets.get(t) ?? 1;
+  const ratio = count / Math.max(medianBucketCount, 1);
+  if (ratio < 3) return 0; // unremarkable density, don't flag at all
+  return Math.min(0.5, 0.15 * Math.log2(ratio));
+}
+
+/**
+ * Builds the full flags array for one comment, given the whole sample for
+ * context (cluster/burst comparisons need the full set, not just one
+ * comment in isolation). Precompute clusters/buckets once per video and
+ * pass them in — see computeYouTubeIntegrityScore below — rather than
+ * recomputing per comment.
+ */
+export function computeYouTubeCommentFlags(comment, { clusters, buckets, medianBucketCount }) {
+  return [
+    duplicateTextFlag(comment, clusters),
+    genericPhraseFlag(comment),
+    spamPatternFlag(comment),
+    burstTimingFlag(comment, buckets, medianBucketCount),
+  ].filter((p) => p > 0);
+}
+
+/**
+ * Full integrity-lane score for a video's comment sample. Wraps the
+ * existing computeIntegrityScore (defined above) — same sufficiency
+ * dampening for thin samples, same noisy-OR convergence model, just fed
+ * YouTube-specific flags instead of generic ones.
+ * @param {Array<{ text: string, authorChannelId: string|null, author: string, publishedAt: string }>} comments
+ */
+export function computeYouTubeIntegrityScore(comments) {
+  const clusters = buildTextClusters(comments);
+  const buckets = buildTimeBuckets(comments);
+  const medianBucketCount = median([...buckets.values()]);
+
+  const items = comments.map((c) => ({
+    flags: computeYouTubeCommentFlags(c, { clusters, buckets, medianBucketCount }),
+    // accountAgeDays intentionally omitted — see file header note above.
+  }));
+
+  return computeIntegrityScore(items);
+}
+
+// ---------------------------------------------------------------------
 // Client — composes existing service clients. No fetch() of its own.
 // ---------------------------------------------------------------------
 
-export function createCredibilityClient({ stackExchangeClient } = {}) {
-  if (!stackExchangeClient) {
-    throw new Error('createCredibilityClient requires a stackExchangeClient (from createStackExchangeClient()).');
+export function createCredibilityClient({ stackExchangeClient, youtubeClient } = {}) {
+  if (!stackExchangeClient && !youtubeClient) {
+    throw new Error('createCredibilityClient requires at least one of stackExchangeClient or youtubeClient.');
   }
 
   return {
@@ -192,6 +349,9 @@ export function createCredibilityClient({ stackExchangeClient } = {}) {
      * but the original mapped shape dropped. See the accompanying patch.
      */
     async checkStackExchangeThread({ questionId, site = 'stackoverflow', limit = 10 }) {
+      if (!stackExchangeClient) {
+        throw new Error('checkStackExchangeThread requires a stackExchangeClient.');
+      }
       const answers = await stackExchangeClient.getAnswers({ questionId, site, limit });
       const nowEpochSeconds = Date.now() / 1000;
 
@@ -228,10 +388,60 @@ export function createCredibilityClient({ stackExchangeClient } = {}) {
       };
     },
 
-    // computeIntegrityScore / noisyOrCombine / ageModifier are exported
-    // standalone above on purpose — this client doesn't need to own them,
-    // it's just the first consumer. YouTube/Reddit modules will call the
-    // same pure functions once their comment-flagging logic exists.
+    /**
+     * Integrity-lane credibility for a YouTube video's comment section.
+     * Composes YouTubeClient.getCommentsForCredibilityCheck() (full
+     * pagination + full reply chains) with computeYouTubeIntegrityScore
+     * (the noisy-OR heuristics defined above: duplicate-text clustering,
+     * generic-phrase matching, spam patterns, posting-burst timing).
+     *
+     * No account-age signal here — that would need a channels.list call
+     * per unique commenter, a cost decision deliberately deferred. This
+     * is a heuristic triage signal, not a verdict: validated against both
+     * synthetic data (a known-correct bot cluster, confirmed separated
+     * cleanly from organic comments) and real video comments (zero false
+     * positives on a genuinely messy, sarcastic, on-topic comment
+     * section).
+     */
+    async checkYouTubeVideo({ videoId, maxComments = 500, fetchAllReplies = true }) {
+      if (!youtubeClient) {
+        throw new Error('checkYouTubeVideo requires a youtubeClient.');
+      }
+      const { commentsDisabled, comments } = await youtubeClient.getCommentsForCredibilityCheck(videoId, {
+        maxComments,
+        fetchAllReplies,
+      });
+
+      if (commentsDisabled) {
+        return {
+          platform: 'youtube',
+          videoId,
+          commentsDisabled: true,
+          integrityScore: null,
+          sampleSize: 0,
+          note: 'Comments are disabled on this video — integrity lane unavailable, not a low score.',
+        };
+      }
+
+      const { integrityScore, sampleSize, perItemBotProbability } = computeYouTubeIntegrityScore(comments);
+
+      const annotated = comments.map((c, i) => ({
+        ...c,
+        botProbability: Math.round(perItemBotProbability[i] * 1000) / 1000,
+      }));
+
+      return {
+        platform: 'youtube',
+        videoId,
+        commentsDisabled: false,
+        integrityScore: Math.round(integrityScore * 10) / 10,
+        sampleSize,
+        comments: annotated,
+        note: sampleSize < 30
+          ? 'Thin sample (fewer than 30 comments) — score is dampened toward neutral (50) accordingly.'
+          : undefined,
+      };
+    },
   };
 }
 
@@ -250,12 +460,33 @@ export const toolDefinitions = [
       required: ['questionId'],
     },
   },
+  {
+    name: 'credibility_check_youtube',
+    description:
+      "Integrity-lane credibility check for a YouTube video's comment section: fetches a large, paginated sample of comments (including full reply chains beyond YouTube's free inline 5) and scores them for bot-likelihood using converging heuristics — duplicate-text clustering across distinct accounts, generic low-effort phrase matching, spam/self-promo patterns, and posting-burst timing. Returns a 0-100 integrity score (dampened toward neutral on thin samples) plus per-comment bot-probability for transparency. Heuristic-only — no account-age or device signal — this is a triage flag for further review, not a verdict.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        videoId: { type: 'string', description: 'YouTube video ID to check' },
+        maxComments: { type: 'number', description: 'Max comments to sample, including replies (default 500)' },
+        fetchAllReplies: {
+          type: 'boolean',
+          description: 'Fetch full reply chains beyond the 5 YouTube includes inline (default true) — costs 1 extra quota unit per thread that has more than 5 replies',
+        },
+      },
+      required: ['videoId'],
+    },
+  },
 ];
 
 export async function handleToolCall(client, name, args) {
   switch (name) {
     case 'credibility_check_stackexchange': {
       const result = await client.checkStackExchangeThread(args);
+      return [{ type: 'text', text: JSON.stringify(result, null, 2) }];
+    }
+    case 'credibility_check_youtube': {
+      const result = await client.checkYouTubeVideo(args);
       return [{ type: 'text', text: JSON.stringify(result, null, 2) }];
     }
     default:
