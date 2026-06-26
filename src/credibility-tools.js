@@ -103,6 +103,61 @@ export function computeHeadlineScore(authorityScore, integrityScore) {
   return Math.round((authorityScore + integrityScore) / 2);
 }
 
+/**
+ * How much benefit of the doubt a zero/low-vote answer gets, based on how
+ * long it's been live. "0 votes" alone is ambiguous — could be a bad
+ * answer, could just be new. A brand-new answer hasn't had time to be
+ * judged; an old, still-unvoted one has, and that absence becomes a real
+ * signal rather than noise.
+ * @param {number|null} ageHours - hours since the answer was posted, or null if unknown
+ */
+export function freshnessFloor(ageHours) {
+  if (ageHours == null) return 15; // unknown age: small neutral floor, same spirit as unknown reputation
+  if (ageHours < 24) return 30;    // under a day old: meaningful benefit of the doubt
+  if (ageHours < 24 * 7) return 15; // under a week: partial benefit of the doubt
+  return 0;                         // a week+ with zero votes is a real (negative) signal now
+}
+
+/**
+ * This answer's own community reception — votes plus accepted status.
+ * The primary signal for authority scoring; reputation only modifies it.
+ * Log-scaled so a handful of votes can't saturate the scale, but a
+ * realistic "good answer" vote count (tens to hundreds) reaches most of
+ * the range. Zero-vote answers fall back to the freshness floor instead
+ * of a flat penalty.
+ * @param {number} score - net vote count
+ * @param {boolean} isAccepted
+ * @param {number|null} ageHours
+ */
+export function communityScore(score, isAccepted, ageHours) {
+  const voteScore = Math.min(85, 30 * Math.log10(Math.max(score, 0) + 1));
+  const floor = score === 0 ? freshnessFloor(ageHours) : 0;
+  return Math.max(voteScore, floor) + (isAccepted ? 15 : 0);
+}
+
+/**
+ * Reputation as a modifier, not an independent point source — a high-rep
+ * author nudges an already-good answer up slightly, but can't single-
+ * handedly carry an answer the community hasn't endorsed. Range is
+ * deliberately narrow (0.85–1.15) so it can never override communityScore.
+ * @param {number|null} reputation
+ */
+export function reputationModifier(reputation) {
+  if (reputation == null) return 1; // unknown reputation: no nudge either way
+  const logRep = Math.log10(Math.max(reputation, 1) + 1);
+  return Math.min(1.15, Math.max(0.85, 0.85 + (logRep / 6) * 0.3));
+}
+
+/**
+ * Combines the above into a single per-answer authority score (0-100).
+ * @param {{ score: number, isAccepted: boolean, reputation: number|null, ageHours: number|null }} params
+ */
+export function computeStackExchangeAuthorityScore({ score, isAccepted, reputation, ageHours }) {
+  const community = communityScore(score, isAccepted, ageHours);
+  const modifier = reputationModifier(reputation);
+  return Math.min(100, community * modifier);
+}
+
 // ---------------------------------------------------------------------
 // Client — composes existing service clients. No fetch() of its own.
 // ---------------------------------------------------------------------
@@ -114,33 +169,46 @@ export function createCredibilityClient({ stackExchangeClient } = {}) {
 
   return {
     /**
-     * Authority-lane credibility for a Stack Exchange answer thread. Uses
-     * vote score, accepted status, and answerer reputation — the
-     * platform's own trust signals, not a derived heuristic.
+     * Authority-lane credibility for a Stack Exchange answer thread.
+     *
+     * Scoring philosophy (revised after testing against real threads):
+     * an answer's OWN community reception (votes, accepted status) is the
+     * primary signal, and the answerer's platform-wide reputation acts as
+     * a modifier — a nudge, not an independent source of points. The
+     * first version did this backwards (reputation could single-handedly
+     * max out the score) and a real test case exposed it: a 0-vote answer
+     * with clearly wrong content scored 88/100 purely because its author
+     * had 209k reputation elsewhere on the site.
+     *
+     * Zero/low-vote answers get a freshness floor instead of a flat
+     * penalty, since "0 votes" is ambiguous — it could mean "bad answer"
+     * or "answer posted 17 minutes ago and nobody's seen it yet." Age
+     * resolves that ambiguity the same way it already does in the
+     * integrity-lane noisy-OR model: a modifier on an otherwise weak
+     * signal, not a verdict on its own.
      *
      * NOTE: requires stackexchange-tools.js's getAnswers() to expose
-     * ownerReputation, which the SE API already returns but the current
-     * mapped shape drops. See the accompanying one-line patch.
+     * ownerReputation and creationDate, which the SE API already returns
+     * but the original mapped shape dropped. See the accompanying patch.
      */
     async checkStackExchangeThread({ questionId, site = 'stackoverflow', limit = 10 }) {
       const answers = await stackExchangeClient.getAnswers({ questionId, site, limit });
+      const nowEpochSeconds = Date.now() / 1000;
 
       const scored = answers.map((a) => {
         const reputation = a.ownerReputation ?? null;
-        // Log-scaled, anchored so 100 is reached around ~1M reputation
-        // instead of ~100k — the old constant saturated on any thread
-        // with a handful of veteran answerers (verified against a real
-        // high-traffic SO question where every answer pegged to 100).
-        const reputationScore = reputation == null
-          ? 50 // unknown reputation: neutral, not penalized
-          : Math.min(100, (100 / 6) * Math.log10(Math.max(reputation, 1) + 1));
-        const acceptedBonus = a.isAccepted ? 15 : 0;
-        // Log-scaled instead of linear — linear capped at just 10 net
-        // votes, which meant any reasonably-upvoted answer maxed this
-        // out and provided zero differentiation among popular answers.
-        const voteBonus = Math.min(20, 4 * Math.log10(Math.max(a.score, 0) + 1));
-        const authorityScore = Math.min(100, reputationScore + acceptedBonus + voteBonus);
-        return { ...a, authorityScore };
+        const ageHours = a.creationDate != null
+          ? (nowEpochSeconds - a.creationDate) / 3600
+          : null;
+
+        const authorityScore = computeStackExchangeAuthorityScore({
+          score: a.score,
+          isAccepted: a.isAccepted,
+          reputation,
+          ageHours,
+        });
+
+        return { ...a, ageHours: ageHours != null ? Math.round(ageHours * 10) / 10 : null, authorityScore };
       });
 
       const overallAuthority = scored.length
