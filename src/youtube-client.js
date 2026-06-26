@@ -38,6 +38,10 @@ export class YouTubeClient {
     });
     const data = await res.json();
     if (!data.access_token) {
+      // TEMPORARY DEBUG — logs Google's full raw error response so we can
+      // see the actual error code/description instead of guessing. Safe
+      // to leave in (stderr only) but remove once this is sorted.
+      console.error('[oauth debug] raw token refresh response:', JSON.stringify(data));
       throw new Error(
         `Failed to refresh access token: ${data.error_description || data.error || 'unknown error'}`
       );
