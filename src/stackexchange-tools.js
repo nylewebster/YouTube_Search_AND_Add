@@ -103,6 +103,7 @@ export function createStackExchangeClient() {
         score: a.score,
         isAccepted: a.is_accepted,
         body: stripHtml(a.body),
+        ownerReputation: a.owner?.reputation ?? null,
       }));
     },
   };
