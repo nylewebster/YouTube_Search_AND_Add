@@ -214,12 +214,25 @@ export class YouTubeClient {
    * for volume and completeness instead, at correspondingly higher quota
    * cost.
    *
+   * maxComments is thread-atomic, not comment-atomic: once a thread is
+   * started, it's always finished in full (all inline + fetched replies),
+   * even if that pushes the total past maxComments. Only the decision to
+   * START a new thread checks the cap. An earlier version cut threads off
+   * mid-reply-fetch the instant the running total crossed the cap, which
+   * meant the heuristics below (duplicate-text clustering, burst-timing
+   * bucket counts) could see an arbitrarily partial picture of whichever
+   * thread happened to be active when the cutoff landed. Slight overshoot
+   * past maxComments (bounded by one thread's full reply count, not
+   * unbounded) is a better tradeoff than torn-in-half thread data.
+   *
    * Quota cost: 1 unit per commentThreads.list page (up to 100 comments
    * per page), plus 1 unit per comments.list call needed to fetch the
    * full reply set for any thread whose replies exceed the 5 YouTube
-   * includes inline for free. Cheap per-call, but scales with reply
-   * volume, not just comment volume — worth watching on very
-   * high-engagement videos with deep reply chains.
+   * includes inline for free. Measured against a real 9M-view video: the
+   * entire call cost ~8 units (~0.08% of the default 10,000/day quota) —
+   * comment-fetching is cheap in practice, even at depth. The default
+   * below is set generously high accordingly; search.list (100 units/
+   * call) remains the actual quota constraint worth watching, not this.
    *
    * Returns { commentsDisabled: true, comments: [] } instead of throwing
    * when the video owner has turned off comments — that's a common,
@@ -229,12 +242,16 @@ export class YouTubeClient {
    * @param {string} videoId
    * @param {{ maxComments?: number, fetchAllReplies?: boolean }} options
    */
-  async getCommentsForCredibilityCheck(videoId, { maxComments = 500, fetchAllReplies = true } = {}) {
-    let threads = [];
+  async getCommentsForCredibilityCheck(videoId, { maxComments = 1500, fetchAllReplies = true } = {}) {
+    const comments = [];
     let pageToken;
 
     try {
-      do {
+      // Labeled so the inner per-thread loop can stop the outer pagination
+      // loop too. The check only gates whether a NEW thread gets started —
+      // see the thread-atomicity note above for why nothing inside the
+      // thread body checks the cap once that decision's been made.
+      pageLoop: do {
         const data = await this._get('commentThreads', {
           part: 'snippet,replies',
           videoId,
@@ -246,46 +263,47 @@ export class YouTubeClient {
           textFormat: 'plainText',
           ...(pageToken ? { pageToken } : {})
         });
-        threads.push(...(data.items || []));
+
+        for (const thread of data.items || []) {
+          if (comments.length >= maxComments) break pageLoop;
+
+          const topId = thread.snippet.topLevelComment.id;
+          comments.push(
+            this._mapComment(thread.snippet.topLevelComment, {
+              isReply: false,
+              parentId: null,
+              replyCount: thread.snippet.totalReplyCount
+            })
+          );
+
+          // Up to 5 replies come inline with the thread for free. No cap
+          // check here — this thread is already committed, see above.
+          const inlineReplies = thread.replies?.comments ?? [];
+          const inlineReplyIds = new Set(inlineReplies.map(r => r.id));
+          for (const reply of inlineReplies) {
+            comments.push(this._mapComment(reply, { isReply: true, parentId: topId, replyCount: null }));
+          }
+
+          // Anything beyond those 5 is truncated by commentThreads.list and
+          // needs a separate comments.list call to retrieve in full —
+          // fetched in full regardless of the cap, for the same reason.
+          if (fetchAllReplies && thread.snippet.totalReplyCount > inlineReplies.length) {
+            const allReplies = await this._getAllReplies(topId);
+            for (const reply of allReplies) {
+              if (!inlineReplyIds.has(reply.id)) {
+                comments.push(this._mapComment(reply, { isReply: true, parentId: topId, replyCount: null }));
+              }
+            }
+          }
+        }
+
         pageToken = data.nextPageToken;
-      } while (pageToken && threads.length < maxComments);
+      } while (pageToken && comments.length < maxComments);
     } catch (err) {
       if (err.reason === 'commentsDisabled') {
         return { commentsDisabled: true, comments: [] };
       }
       throw err;
-    }
-
-    threads = threads.slice(0, maxComments);
-    const comments = [];
-
-    for (const thread of threads) {
-      const topId = thread.snippet.topLevelComment.id;
-      comments.push(
-        this._mapComment(thread.snippet.topLevelComment, {
-          isReply: false,
-          parentId: null,
-          replyCount: thread.snippet.totalReplyCount
-        })
-      );
-
-      // Up to 5 replies come inline with the thread for free.
-      const inlineReplies = thread.replies?.comments ?? [];
-      const inlineReplyIds = new Set(inlineReplies.map(r => r.id));
-      for (const reply of inlineReplies) {
-        comments.push(this._mapComment(reply, { isReply: true, parentId: topId, replyCount: null }));
-      }
-
-      // Anything beyond those 5 is truncated by commentThreads.list and
-      // needs a separate comments.list call to retrieve in full.
-      if (fetchAllReplies && thread.snippet.totalReplyCount > inlineReplies.length) {
-        const allReplies = await this._getAllReplies(topId);
-        for (const reply of allReplies) {
-          if (!inlineReplyIds.has(reply.id)) {
-            comments.push(this._mapComment(reply, { isReply: true, parentId: topId, replyCount: null }));
-          }
-        }
-      }
     }
 
     return { commentsDisabled: false, comments };

@@ -415,7 +415,7 @@ export function createCredibilityClient({ stackExchangeClient, youtubeClient } =
      * positives on a genuinely messy, sarcastic, on-topic comment
      * section).
      */
-    async checkYouTubeVideo({ videoId, maxComments = 500, fetchAllReplies = true }) {
+    async checkYouTubeVideo({ videoId, maxComments = 1500, fetchAllReplies = true }) {
       if (!youtubeClient) {
         throw new Error('checkYouTubeVideo requires a youtubeClient.');
       }
@@ -480,7 +480,7 @@ export const toolDefinitions = [
       type: 'object',
       properties: {
         videoId: { type: 'string', description: 'YouTube video ID to check' },
-        maxComments: { type: 'number', description: 'Max comments to sample, including replies (default 500)' },
+        maxComments: { type: 'number', description: 'Max comments to sample, including replies (default 1500). Thread-atomic — a thread already in progress when this is reached finishes in full, so the actual count may overshoot slightly rather than cut a thread off mid-reply-fetch.' },
         fetchAllReplies: {
           type: 'boolean',
           description: 'Fetch full reply chains beyond the 5 YouTube includes inline (default true) — costs 1 extra quota unit per thread that has more than 5 replies',
