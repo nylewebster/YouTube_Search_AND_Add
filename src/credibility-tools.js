@@ -127,11 +127,18 @@ export function createCredibilityClient({ stackExchangeClient } = {}) {
 
       const scored = answers.map((a) => {
         const reputation = a.ownerReputation ?? null;
+        // Log-scaled, anchored so 100 is reached around ~1M reputation
+        // instead of ~100k — the old constant saturated on any thread
+        // with a handful of veteran answerers (verified against a real
+        // high-traffic SO question where every answer pegged to 100).
         const reputationScore = reputation == null
           ? 50 // unknown reputation: neutral, not penalized
-          : Math.min(100, 20 * Math.log10(Math.max(reputation, 1) + 1));
+          : Math.min(100, (100 / 6) * Math.log10(Math.max(reputation, 1) + 1));
         const acceptedBonus = a.isAccepted ? 15 : 0;
-        const voteBonus = Math.min(20, Math.max(a.score, 0) * 2);
+        // Log-scaled instead of linear — linear capped at just 10 net
+        // votes, which meant any reasonably-upvoted answer maxed this
+        // out and provided zero differentiation among popular answers.
+        const voteBonus = Math.min(20, 4 * Math.log10(Math.max(a.score, 0) + 1));
         const authorityScore = Math.min(100, reputationScore + acceptedBonus + voteBonus);
         return { ...a, authorityScore };
       });
