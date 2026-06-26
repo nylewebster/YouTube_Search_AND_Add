@@ -67,6 +67,11 @@ if (!process.env.OPENAI_API_KEY) {
   console.error('whenever YouTube captions are unavailable — summaries will drop to metadata-only instead.');
 }
 
+if (!process.env.ANTHROPIC_API_KEY) {
+  console.error('WARNING: ANTHROPIC_API_KEY is not set. The vibe classifier in credibility_check will');
+  console.error('fail silently — scores will return without vibe distributions until this is set.');
+}
+
 if (!process.env.STACKEXCHANGE_API_KEY) {
   console.error('NOTE: STACKEXCHANGE_API_KEY is not set. Stack Exchange tools will work but are capped');
   console.error('at 300 requests/day/IP instead of 10,000 — register a free key at stackapps.com if needed.');
