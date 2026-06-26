@@ -25,6 +25,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { createYouTubeClient, toolDefinitions as ytToolDefinitions, handleToolCall as handleYtToolCall } from './youtube-tools.js';
 import { createStackExchangeClient, toolDefinitions as seToolDefinitions, handleToolCall as handleSeToolCall } from './stackexchange-tools.js';
+import { createCredibilityClient, toolDefinitions as credToolDefinitions, handleToolCall as handleCredToolCall } from './credibility-tools.js';
 import fs from 'node:fs';
 import { registerOAuthRoutes, validateAccessToken } from './oauth.js';
 
@@ -43,11 +44,20 @@ if (!BASE_URL) {
 
 const yt = createYouTubeClient();
 const se = createStackExchangeClient();
+const cred = createCredibilityClient({ stackExchangeClient: se });
 
-// Merge tool definitions from both sources, and keep a lookup set so the
-// call handler below knows which client/dispatcher to route each tool to.
-const allToolDefinitions = [...ytToolDefinitions, ...seToolDefinitions];
-const seToolNames = new Set(seToolDefinitions.map(t => t.name));
+// Merge tool definitions from all sources, and build a name -> handler
+// lookup so the call handler below knows which client/dispatcher to route
+// each tool to. A Map instead of per-service Sets/branches, since a third
+// (and eventually fourth, once Reddit lands) service makes binary checks
+// awkward fast.
+const allToolDefinitions = [...ytToolDefinitions, ...seToolDefinitions, ...credToolDefinitions];
+
+const toolRouter = new Map([
+  ...ytToolDefinitions.map((t) => [t.name, (n, a) => handleYtToolCall(yt, n, a)]),
+  ...seToolDefinitions.map((t) => [t.name, (n, a) => handleSeToolCall(se, n, a)]),
+  ...credToolDefinitions.map((t) => [t.name, (n, a) => handleCredToolCall(cred, n, a)]),
+]);
 
 if (!process.env.OPENAI_API_KEY) {
   console.error('WARNING: OPENAI_API_KEY is not set. The Whisper transcript fallback will be skipped');
@@ -76,9 +86,11 @@ function buildServer() {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     try {
-      const content = seToolNames.has(name)
-        ? await handleSeToolCall(se, name, args)
-        : await handleYtToolCall(yt, name, args);
+      const handler = toolRouter.get(name);
+      if (!handler) {
+        throw new Error(`Unknown tool: ${name}`);
+      }
+      const content = await handler(name, args);
       return { content };
     } catch (err) {
       // NOTE: added for debugging — logs the real error to Railway logs
