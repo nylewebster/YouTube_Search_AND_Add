@@ -26,6 +26,7 @@ import {
 import { createYouTubeClient, toolDefinitions as ytToolDefinitions, handleToolCall as handleYtToolCall } from './youtube-tools.js';
 import { createStackExchangeClient, toolDefinitions as seToolDefinitions, handleToolCall as handleSeToolCall } from './stackexchange-tools.js';
 import { createCredibilityClient, toolDefinitions as credToolDefinitions, handleToolCall as handleCredToolCall } from './credibility-tools.js';
+import { createOrchestratorClient, toolDefinitions as orchToolDefinitions, handleToolCall as handleOrchToolCall } from './orchestrator-tools.js';
 import fs from 'node:fs';
 import { registerOAuthRoutes, validateAccessToken } from './oauth.js';
 
@@ -45,18 +46,20 @@ if (!BASE_URL) {
 const yt = createYouTubeClient();
 const se = createStackExchangeClient();
 const cred = createCredibilityClient({ stackExchangeClient: se, youtubeClient: yt });
+const orch = createOrchestratorClient({ credibilityClient: cred, youtubeClient: yt, stackExchangeClient: se });
 
 // Merge tool definitions from all sources, and build a name -> handler
 // lookup so the call handler below knows which client/dispatcher to route
 // each tool to. A Map instead of per-service Sets/branches, since a third
 // (and eventually fourth, once Reddit lands) service makes binary checks
 // awkward fast.
-const allToolDefinitions = [...ytToolDefinitions, ...seToolDefinitions, ...credToolDefinitions];
+const allToolDefinitions = [...ytToolDefinitions, ...seToolDefinitions, ...credToolDefinitions, ...orchToolDefinitions];
 
 const toolRouter = new Map([
   ...ytToolDefinitions.map((t) => [t.name, (n, a) => handleYtToolCall(yt, n, a)]),
   ...seToolDefinitions.map((t) => [t.name, (n, a) => handleSeToolCall(se, n, a)]),
   ...credToolDefinitions.map((t) => [t.name, (n, a) => handleCredToolCall(cred, n, a)]),
+  ...orchToolDefinitions.map((t) => [t.name, (n, a) => handleOrchToolCall(orch, n, a)]),
 ]);
 
 if (!process.env.OPENAI_API_KEY) {
