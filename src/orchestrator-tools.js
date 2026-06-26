@@ -84,6 +84,49 @@ function buildTopFlags(allAnnotatedComments, n = 10) {
     }));
 }
 
+/**
+ * Ask Claude to extract a clean Stack Exchange search query from a
+ * YouTube video's title and description. Returns null if the API call
+ * fails or the video doesn't have a clear SE-searchable topic.
+ *
+ * YouTube titles are written for click appeal, not topic clarity —
+ * "Building a PC to BEAT the STEAM Machine!" is a real title that naive
+ * stripping turned into a query matching Java SAX XML parsing. A single
+ * Claude API call handles the full range of title styles robustly.
+ */
+async function deriveSeQueryFromVideo(title, description = '') {
+  const prompt = `Given this YouTube video title and description excerpt, extract the core technical topic that would make the best Stack Exchange search query. Return ONLY the search query — 2-6 words, no punctuation, no channel names, no hype words. If there is no clear technical topic suitable for Stack Exchange, return the single word: NONE.
+
+Title: ${title}
+Description excerpt: ${description.slice(0, 300)}`;
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY ?? '',
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 30,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+
+    if (!res.ok) throw new Error(`API error ${res.status}`);
+    const data = await res.json();
+    const query = data.content?.find(b => b.type === 'text')?.text?.trim() ?? '';
+
+    if (!query || query === 'NONE') return null;
+    return query;
+  } catch (err) {
+    console.error('[orchestrator] deriveSeQueryFromVideo failed:', err.message);
+    return null;
+  }
+}
+
 export function createOrchestratorClient({ credibilityClient, youtubeClient, stackExchangeClient }) {
   if (!credibilityClient || !youtubeClient || !stackExchangeClient) {
     throw new Error('createOrchestratorClient requires credibilityClient, youtubeClient, and stackExchangeClient.');
@@ -104,14 +147,15 @@ export function createOrchestratorClient({ credibilityClient, youtubeClient, sta
         inputType = 'youtube_url';
         videoIds = [videoIdFromUrl];
 
-        // Cheap metadata fetch (1 quota unit) to get the title for SE search
+        // Use Claude to derive a clean SE search query from the video's
+        // title + description. Naive string-stripping fails on YouTube
+        // titles written for click appeal rather than topic clarity
+        // (confirmed: "Building a PC to BEAT the STEAM Machine!" stripped
+        // to a nonsense query that matched a Java SAX XML parsing question).
+        // A single cheap API call is more robust to this class of title.
         try {
           const details = await youtubeClient.getVideoDetails(videoIdFromUrl);
-          // Strip common filler like channel names in brackets, "Official Video", etc.
-          seQuery = details.title
-            .replace(/\s*[\[\(].*?[\]\)]/g, '')
-            .replace(/\s*\|\s*.+$/, '')
-            .trim();
+          seQuery = await deriveSeQueryFromVideo(details.title, details.description);
         } catch (err) {
           console.error('[orchestrator] Failed to fetch video details for SE query:', err.message);
           seQuery = null; // SE lane will be skipped rather than crashed
