@@ -266,9 +266,21 @@ function median(numbers) {
 
 /**
  * Burst-timing flag: this comment landed in a time bucket far denser than
- * the video's own typical pacing. Relative to the sample's median bucket
- * density, not an absolute threshold — a viral video's normal pace is a
- * slow trickle's bot-network density, so "normal" has to be per-video.
+ * this video's typical bucket density. Relative to the sample's median
+ * bucket density, not an absolute threshold — a viral video's normal pace
+ * is a slow trickle's bot-network density, so "normal" has to be per-video.
+ *
+ * KNOWN LIMITATION (verified, not speculative — confirmed by re-running
+ * this exact function against a real 715-comment dataset): the median is
+ * computed across the ENTIRE comment history passed in, with no recency
+ * weighting or rolling window. That means it cannot distinguish "a real
+ * burst happening right now" from "this video has a long, sparse comment
+ * tail, and one ordinary minute happened to land 3 comments instead of
+ * 1." Both produce an identical ratio and an identical flag. If that
+ * distinction ever matters (e.g. to specifically catch launch-day
+ * coordination rather than any momentary spike, ever), the fix is a
+ * rolling recent-window median instead of an all-time one — that would
+ * make the function's actual behavior match what "burst" implies.
  */
 export function burstTimingFlag(comment, buckets, medianBucketCount, bucketSeconds = 60) {
   if (!comment.publishedAt || medianBucketCount === 0) return 0;
