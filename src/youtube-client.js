@@ -53,7 +53,16 @@ export class YouTubeClient {
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json();
-    if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+    if (data.error) {
+      const err = new Error(data.error.message || JSON.stringify(data.error));
+      // Additive — existing callers only ever read err.message, so this
+      // doesn't change behavior for anyone already catching errors here.
+      // Lets new callers (e.g. getCommentsForCredibilityCheck) branch on
+      // the structured reason code instead of fragile message-text
+      // matching, e.g. err.reason === 'commentsDisabled'.
+      err.reason = data.error.errors?.[0]?.reason ?? null;
+      throw err;
+    }
     return data;
   }
 
@@ -191,6 +200,126 @@ export class YouTubeClient {
         replyCount: item.snippet.totalReplyCount
       };
     });
+  }
+
+  /**
+   * Get a large, paginated sample of comments — including full reply
+   * chains — built for the credibility integrity lane. Deliberately
+   * separate from getVideoComments() above, which stays small and fast
+   * for its existing "quick sentiment check" use case; this one is built
+   * for volume and completeness instead, at correspondingly higher quota
+   * cost.
+   *
+   * Quota cost: 1 unit per commentThreads.list page (up to 100 comments
+   * per page), plus 1 unit per comments.list call needed to fetch the
+   * full reply set for any thread whose replies exceed the 5 YouTube
+   * includes inline for free. Cheap per-call, but scales with reply
+   * volume, not just comment volume — worth watching on very
+   * high-engagement videos with deep reply chains.
+   *
+   * Returns { commentsDisabled: true, comments: [] } instead of throwing
+   * when the video owner has turned off comments — that's a common,
+   * expected response per YouTube's docs, not an error condition callers
+   * should have to handle as one.
+   *
+   * @param {string} videoId
+   * @param {{ maxComments?: number, fetchAllReplies?: boolean }} options
+   */
+  async getCommentsForCredibilityCheck(videoId, { maxComments = 500, fetchAllReplies = true } = {}) {
+    let threads = [];
+    let pageToken;
+
+    try {
+      do {
+        const data = await this._get('commentThreads', {
+          part: 'snippet,replies',
+          videoId,
+          maxResults: 100,
+          // 'time' (chronological), not 'relevance' — relevance pre-sorts
+          // toward already-popular comments, which would bias whatever
+          // timing/clustering heuristics get built on top of this sample.
+          order: 'time',
+          textFormat: 'plainText',
+          ...(pageToken ? { pageToken } : {})
+        });
+        threads.push(...(data.items || []));
+        pageToken = data.nextPageToken;
+      } while (pageToken && threads.length < maxComments);
+    } catch (err) {
+      if (err.reason === 'commentsDisabled') {
+        return { commentsDisabled: true, comments: [] };
+      }
+      throw err;
+    }
+
+    threads = threads.slice(0, maxComments);
+    const comments = [];
+
+    for (const thread of threads) {
+      const topId = thread.snippet.topLevelComment.id;
+      comments.push(
+        this._mapComment(thread.snippet.topLevelComment, {
+          isReply: false,
+          parentId: null,
+          replyCount: thread.snippet.totalReplyCount
+        })
+      );
+
+      // Up to 5 replies come inline with the thread for free.
+      const inlineReplies = thread.replies?.comments ?? [];
+      const inlineReplyIds = new Set(inlineReplies.map(r => r.id));
+      for (const reply of inlineReplies) {
+        comments.push(this._mapComment(reply, { isReply: true, parentId: topId, replyCount: null }));
+      }
+
+      // Anything beyond those 5 is truncated by commentThreads.list and
+      // needs a separate comments.list call to retrieve in full.
+      if (fetchAllReplies && thread.snippet.totalReplyCount > inlineReplies.length) {
+        const allReplies = await this._getAllReplies(topId);
+        for (const reply of allReplies) {
+          if (!inlineReplyIds.has(reply.id)) {
+            comments.push(this._mapComment(reply, { isReply: true, parentId: topId, replyCount: null }));
+          }
+        }
+      }
+    }
+
+    return { commentsDisabled: false, comments };
+  }
+
+  /** Fetches the complete, paginated reply set for one comment thread. */
+  async _getAllReplies(parentId) {
+    let replies = [];
+    let pageToken;
+    do {
+      const data = await this._get('comments', {
+        part: 'snippet',
+        parentId,
+        maxResults: 100,
+        textFormat: 'plainText',
+        ...(pageToken ? { pageToken } : {})
+      });
+      replies.push(...(data.items || []));
+      pageToken = data.nextPageToken;
+    } while (pageToken);
+    return replies;
+  }
+
+  /** Normalizes a raw API comment object (top-level or reply) into one shape. */
+  _mapComment(item, { isReply, parentId, replyCount }) {
+    const s = item.snippet;
+    return {
+      id: item.id,
+      author: s.authorDisplayName,
+      authorChannelId: s.authorChannelId?.value ?? null,
+      text: s.textDisplay,
+      likeCount: s.likeCount,
+      publishedAt: s.publishedAt,
+      updatedAt: s.updatedAt,
+      isReply,
+      parentId,
+      replyCount // null for replies — replies don't have their own totalReplyCount
+    };
   }
 
   /** Create a new playlist. */
