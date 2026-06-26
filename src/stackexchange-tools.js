@@ -104,6 +104,7 @@ export function createStackExchangeClient() {
         isAccepted: a.is_accepted,
         body: stripHtml(a.body),
         ownerReputation: a.owner?.reputation ?? null,
+        creationDate: a.creation_date ?? null,
       }));
     },
   };
