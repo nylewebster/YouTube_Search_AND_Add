@@ -95,10 +95,18 @@ function buildTopFlags(allAnnotatedComments, n = 10) {
  * Claude API call handles the full range of title styles robustly.
  */
 async function deriveSeQueryFromVideo(title, description = '') {
-  const prompt = `Given this YouTube video title and description excerpt, extract the core technical topic that would make the best Stack Exchange search query. Return ONLY the search query — 2-6 words, no punctuation, no channel names, no hype words. If there is no clear technical topic suitable for Stack Exchange, return the single word: NONE.
+  const prompt = `Extract a Stack Exchange search query from this YouTube video title and description.
+
+Rules:
+- Output ONLY the query itself — no explanation, no preamble, no punctuation
+- 2-6 words maximum
+- No channel names, no hype words ("BEST", "BEAT", "AMAZING")
+- If no clear technical/factual topic exists for Stack Exchange, output exactly: NONE
 
 Title: ${title}
-Description excerpt: ${description.slice(0, 300)}`;
+Description: ${description.slice(0, 200)}
+
+Query:`;
 
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -110,16 +118,24 @@ Description excerpt: ${description.slice(0, 300)}`;
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 30,
+        max_tokens: 20,
         messages: [{ role: 'user', content: prompt }],
       }),
     });
 
     if (!res.ok) throw new Error(`API error ${res.status}`);
     const data = await res.json();
-    const query = data.content?.find(b => b.type === 'text')?.text?.trim() ?? '';
+    const raw = data.content?.find(b => b.type === 'text')?.text?.trim() ?? '';
 
-    if (!query || query === 'NONE') return null;
+    // Sanitize: strip markdown, take only the first line, cap at 60 chars
+    const query = raw
+      .replace(/\*\*/g, '')
+      .replace(/^(query:|answer:|result:)\s*/i, '')
+      .split('\n')[0]
+      .trim()
+      .slice(0, 60);
+
+    if (!query || query.toUpperCase() === 'NONE') return null;
     return query;
   } catch (err) {
     console.error('[orchestrator] deriveSeQueryFromVideo failed:', err.message);
