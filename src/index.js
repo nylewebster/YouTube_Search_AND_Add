@@ -15,7 +15,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 config({ path: path.join(__dirname, '..', '.env') }); // no-op on Railway; useful for local HTTP testing
 
 import express from 'express';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
@@ -27,6 +27,7 @@ import { createYouTubeClient, toolDefinitions as ytToolDefinitions, handleToolCa
 import { createStackExchangeClient, toolDefinitions as seToolDefinitions, handleToolCall as handleSeToolCall } from './stackexchange-tools.js';
 import { createCredibilityClient, toolDefinitions as credToolDefinitions, handleToolCall as handleCredToolCall } from './credibility-tools.js';
 import { createOrchestratorClient, toolDefinitions as orchToolDefinitions, handleToolCall as handleOrchToolCall } from './orchestrator-tools.js';
+import { createStackExchangeSmartSearchClient, toolDefinitions as seSmartToolDefinitions, handleToolCall as handleSeSmartToolCall } from './stackexchange-smart-search-tools.js';
 import fs from 'node:fs';
 import { registerOAuthRoutes, validateAccessToken } from './oauth.js';
 
@@ -47,19 +48,21 @@ const yt = createYouTubeClient();
 const se = createStackExchangeClient();
 const cred = createCredibilityClient({ stackExchangeClient: se, youtubeClient: yt });
 const orch = createOrchestratorClient({ credibilityClient: cred, youtubeClient: yt, stackExchangeClient: se });
+const seSmart = createStackExchangeSmartSearchClient({ stackExchangeClient: se });
 
 // Merge tool definitions from all sources, and build a name -> handler
 // lookup so the call handler below knows which client/dispatcher to route
 // each tool to. A Map instead of per-service Sets/branches, since a third
 // (and eventually fourth, once Reddit lands) service makes binary checks
 // awkward fast.
-const allToolDefinitions = [...ytToolDefinitions, ...seToolDefinitions, ...credToolDefinitions, ...orchToolDefinitions];
+const allToolDefinitions = [...ytToolDefinitions, ...seToolDefinitions, ...credToolDefinitions, ...orchToolDefinitions, ...seSmartToolDefinitions];
 
 const toolRouter = new Map([
   ...ytToolDefinitions.map((t) => [t.name, (n, a) => handleYtToolCall(yt, n, a)]),
   ...seToolDefinitions.map((t) => [t.name, (n, a) => handleSeToolCall(se, n, a)]),
   ...credToolDefinitions.map((t) => [t.name, (n, a) => handleCredToolCall(cred, n, a)]),
   ...orchToolDefinitions.map((t) => [t.name, (n, a) => handleOrchToolCall(orch, n, a)]),
+  ...seSmartToolDefinitions.map((t) => [t.name, (n, a) => handleSeSmartToolCall(seSmart, n, a)]),
 ]);
 
 if (!process.env.OPENAI_API_KEY) {
@@ -126,48 +129,6 @@ app.use((req, res, next) => {
 registerOAuthRoutes(app, { baseUrl: BASE_URL });
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
-
-// ---- Local credibility viewer endpoint ----
-// A thin HTTP wrapper over the orchestrator's checkCredibility(), guarded by
-// a single static bearer token (OAUTH_CLIENT_SECRET — the same secret oauth.js
-// uses). This deliberately bypasses the full OAuth access-token flow so a
-// local tool (the credibility-viewer Vite app) can fetch a JSON report without
-// reimplementing the authorization-code handshake. Not for Claude's MCP
-// connector — that still goes through /mcp + requireAuth.
-function requireRenderToken(req, res, next) {
-  const header = req.headers.authorization || '';
-  const provided = header.startsWith('Bearer ') ? header.slice(7) : null;
-  const expected = process.env.OAUTH_CLIENT_SECRET;
-  // Length check first: timingSafeEqual throws if the buffers differ in length.
-  if (!provided || !expected || provided.length !== expected.length) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return;
-  }
-  const ok = timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
-  if (!ok) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return;
-  }
-  next();
-}
-
-app.post('/credibility-render', requireRenderToken, async (req, res) => {
-  const { input, includeVibe } = req.body ?? {};
-  if (typeof input !== 'string' || !input.trim()) {
-    res.status(400).json({ error: 'Body must include a non-empty "input" string (a YouTube URL or topic).' });
-    return;
-  }
-  try {
-    // Only forward includeVibe when explicitly provided, so checkCredibility's
-    // own default (true) applies otherwise.
-    const args = typeof includeVibe === 'boolean' ? { input, includeVibe } : { input };
-    const result = await orch.checkCredibility(args);
-    res.json(result);
-  } catch (err) {
-    console.error('[credibility-render error]', err.stack || err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
 
 function requireAuth(req, res, next) {
   if (!validateAccessToken(req)) {

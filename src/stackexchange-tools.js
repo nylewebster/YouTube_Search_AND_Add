@@ -27,6 +27,13 @@ function stripHtml(html = '') {
 export function createStackExchangeClient() {
   const apiKey = process.env.STACKEXCHANGE_API_KEY || null;
 
+  // In-memory cache for the site list — ~180 sites that almost never
+  // change. Fetching this on every call that needs site context (e.g.
+  // the smart search's site-selection step) would waste quota and add
+  // latency for no benefit. Cache persists for the lifetime of the
+  // server process; a Railway redeploy clears it naturally.
+  let _siteCache = null;
+
   // SE API responses are gzip-encoded server-side regardless of
   // Accept-Encoding. Node 18+ fetch() auto-decompresses, so res.json()
   // just works as-is.
@@ -55,17 +62,26 @@ export function createStackExchangeClient() {
 
   return {
     async listSites({ limit = 100 } = {}) {
+      // Return cached result if available — site list rarely changes and
+      // costs a quota unit every time it's fetched fresh.
+      if (_siteCache) {
+        console.error('[stackexchange] listSites: returning cached site list');
+        return _siteCache;
+      }
+
       // No custom filter here on purpose — compiled SE filter strings are
       // opaque IDs you can only get back from SE's /filters/create endpoint,
       // they can't be hand-written. The default response already includes
       // name/api_site_parameter/audience/site_url, so we just pick those out.
       const data = await seFetch('/sites', { pagesize: limit });
-      return data.items.map((s) => ({
+      _siteCache = data.items.map((s) => ({
         name: s.name,
         site: s.api_site_parameter,
         audience: s.audience,
         url: s.site_url,
       }));
+      console.error(`[stackexchange] listSites: fetched and cached ${_siteCache.length} sites`);
+      return _siteCache;
     },
 
     async searchQuestions({ query, tags, site = 'stackoverflow', sort = 'relevance', limit = 10 }) {
@@ -105,6 +121,33 @@ export function createStackExchangeClient() {
         body: stripHtml(a.body),
         ownerReputation: a.owner?.reputation ?? null,
         creationDate: a.creation_date ?? null,
+      }));
+    },
+
+    /**
+     * Search for tags that actually exist on a given SE site by partial
+     * name match. Used by the smart search's tag discovery step to confirm
+     * candidate terms before building a tagged query — guessed tags that
+     * don't exist on the target site silently return no results.
+     *
+     * Costs 1 quota unit per call. No cap on candidate terms by design —
+     * accuracy matters more than quota here given the 10k/day budget.
+     *
+     * @param {string} inname - partial tag name to search for
+     * @param {string} site - SE site slug
+     * @param {number} limit - max tags to return (default 5)
+     */
+    async searchTags({ inname, site = 'stackoverflow', limit = 5 }) {
+      const data = await seFetch('/tags', {
+        inname,
+        site,
+        sort: 'popular',
+        order: 'desc',
+        pagesize: limit,
+      });
+      return (data.items || []).map((t) => ({
+        name: t.name,
+        count: t.count, // question count — useful for knowing how established a tag is
       }));
     },
   };
