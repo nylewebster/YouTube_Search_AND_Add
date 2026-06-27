@@ -250,7 +250,15 @@ ${results.slice(0, 5).map((r, i) => `${i + 1}. ${r.title} [${r.tags?.join(', ')}
       relevant: judgment.relevant,
     });
 
-    if (results.length > bestResults.length || (judgment.score > (attempts[attempts.length - 2]?.score ?? 0))) {
+    // Track the best non-empty result set across all attempts. Critical rule:
+    // never replace a non-empty result set with an empty one — a later attempt
+    // that over-narrows (e.g. adding a specific free-text query that collapses
+    // the SE API result to zero) should fall back to the best earlier set, not
+    // wipe it out. Confirmed SE API quirk: tag-only search returns 10 results,
+    // same tag + specific query string returns 0 — the empty result is a false
+    // zero, not a genuine "nothing exists."
+    const bestScore = attempts.slice(0, -1).reduce((max, a) => Math.max(max, a.score ?? 0), 0);
+    if (results.length > 0 && (bestResults.length === 0 || judgment.score >= bestScore)) {
       bestResults = results;
     }
 
