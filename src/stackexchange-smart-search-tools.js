@@ -137,13 +137,39 @@ Rules:
     try {
       const tags = await seClient.searchTags({ inname: term, site, limit: 3 });
       if (tags.length > 0) {
-        // Take the most popular matching tag — if we searched "async" and got
-        // "async-await" (50k questions) and "async" (8k questions), prefer the
-        // most established one that still contains our term
-        const best = tags[0];
-        confirmed.push(best.name);
-        tagDetails.push({ candidate: term, resolvedTag: best.name, questionCount: best.count });
-        console.error(`[se-smart-search] tag confirmed: "${term}" → [${best.name}] (${best.count} questions)`);
+        // Only accept a resolved tag if it actually starts with the full candidate
+        // term — prevents false confirmations where a more specific tag happens
+        // to be the most popular inname match. Real example: candidate "gran-turismo"
+        // resolved to "gran-turismo-5" (42 questions) instead of a generic tag,
+        // which would have searched GT5 content for a GT7 question.
+        // "gran-turismo-5".startsWith("gran-turismo") = true — so we also require
+        // that anything AFTER the candidate is either nothing or a hyphen separator,
+        // meaning "gran-turismo" accepts "gran-turismo" (exact) but rejects
+        // "gran-turismo-5" (more specific version tag).
+        const exactMatch = tags.find(t => t.name === term);
+        const prefixMatch = tags.find(t => {
+          if (!t.name.startsWith(term)) return false;
+          const suffix = t.name.slice(term.length);
+          // Accept exact match or extension by hyphen (e.g. "async" → "async-await")
+          // but NOT version suffixes that change the meaning (e.g. "gran-turismo" → "gran-turismo-5")
+          // Heuristic: if the suffix after the hyphen is purely numeric, it's a version — reject it
+          if (suffix === '') return true;
+          if (!suffix.startsWith('-')) return false;
+          const afterHyphen = suffix.slice(1);
+          return !/^\d+$/.test(afterHyphen); // reject pure numeric version suffixes
+        });
+        const best = exactMatch ?? prefixMatch ?? null;
+
+        if (best) {
+          confirmed.push(best.name);
+          tagDetails.push({ candidate: term, resolvedTag: best.name, questionCount: best.count });
+          console.error(`[se-smart-search] tag confirmed: "${term}" → [${best.name}] (${best.count} questions)`);
+        } else {
+          // Tags were returned but none contained the candidate term — likely
+          // a false positive from the inname search (e.g. "gran-turismo" → "gran-turismo-5")
+          console.error(`[se-smart-search] tag rejected (no containment match): "${term}" — top result was "${tags[0].name}"`);
+          tagDetails.push({ candidate: term, resolvedTag: null, questionCount: 0, rejectedAs: tags[0].name });
+        }
       } else {
         console.error(`[se-smart-search] tag not found on ${site}: "${term}"`);
         tagDetails.push({ candidate: term, resolvedTag: null, questionCount: 0 });
