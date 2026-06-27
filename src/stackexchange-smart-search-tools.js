@@ -265,6 +265,26 @@ export function createStackExchangeSmartSearchClient({ stackExchangeClient }) {
       const { confirmedTags, tagDetails, candidatesTriedCount } = await discoverTags(goal, site, stackExchangeClient);
       console.error(`[se-smart-search] confirmed ${confirmedTags.length}/${candidatesTriedCount} candidate tags: [${confirmedTags.join(', ')}]`);
 
+      // Early exit: if no tags were confirmed, the topic almost certainly
+      // doesn't have meaningful SE coverage on this site. Skip the judgment
+      // loop entirely rather than burning quota on searches guaranteed to
+      // return nothing or irrelevant results.
+      if (confirmedTags.length === 0) {
+        console.error(`[se-smart-search] zero confirmed tags — skipping judgment loop, returning no-content result`);
+        return {
+          goal,
+          site,
+          siteName,
+          siteReasoning,
+          tagDiscovery: { candidatesTriedCount, tagDetails, confirmedTags },
+          finalTags: '',
+          finalQuery: '',
+          searchAttempts: [],
+          results: [],
+          note: `No relevant Stack Exchange content found — none of the candidate tags (${tagDetails.map(t => t.candidate).join(', ')}) exist on ${siteName}. This topic likely doesn't have SE coverage.`,
+        };
+      }
+
       // Stage 3: judgment loop
       const { results, attempts, finalQuery, finalTags } = await judgmentLoop({
         goal,
