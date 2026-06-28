@@ -277,6 +277,22 @@ export function createResearchBriefClient({
         ? Math.round(validScores.reduce((sum, s) => sum + s, 0) / validScores.length * 10) / 10
         : null;
 
+      // ── Pull summaries to top level ───────────────────────────────────────
+      // Summaries live inside each video object but are the most frequently
+      // needed output — pulling them to the top level means any consumer
+      // (the credibility viewer, future tooling, the presenting instance)
+      // gets them without having to dig into per-video credibility objects.
+      // They also remain inside videos[] for full per-video context.
+      const summaries = videoResults.map(v => ({
+        videoId: v.videoId,
+        title: v.title,
+        channel: v.channel,
+        url: v.url,
+        summary: v.summary?.summary ?? null,
+        transcriptSource: v.summary?.transcriptSource ?? v.summary?.source ?? null,
+        transcriptErrorClassification: v.summary?.transcriptErrorClassification ?? null,
+      }));
+
       // ── Build the brief ───────────────────────────────────────────────────
       return {
         topic,
@@ -285,6 +301,7 @@ export function createResearchBriefClient({
         playlist: playlistResult,
         headlineIntegrityScore,
         videoCount: videoResults.length,
+        summaries,
         videos: videoResults,
         note: [
           headlineIntegrityScore == null ? 'Credibility scores unavailable.' : null,
