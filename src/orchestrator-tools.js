@@ -172,6 +172,11 @@ export function createOrchestratorClient({ credibilityClient, youtubeClient, sta
         try {
           const details = await youtubeClient.getVideoDetails(videoIdFromUrl);
           seQuery = await deriveSeQueryFromVideo(details.title, details.description);
+          // Always set topic from the video title so the output has a
+          // human-readable label even when SE query derivation returns null
+          // (e.g. music videos, non-technical content). Without this, topic
+          // falls back to the raw URL in the credibility viewer header.
+          if (!seQuery) seQuery = details.title.slice(0, 60);
         } catch (err) {
           console.error('[orchestrator] Failed to fetch video details for SE query:', err.message);
           seQuery = null; // SE lane will be skipped rather than crashed
@@ -340,9 +345,15 @@ export function createOrchestratorClient({ credibilityClient, youtubeClient, sta
         vibeDistribution: {
           perVideo: youtubeVibes.map((v, i) => v ? { videoId: videoIds[i], ...v } : null).filter(Boolean),
           combined: combinedVibeDistribution,
+          // vibeSkipped makes silent partial results visible — if includeVibe
+          // was true but vibe data is absent, something failed (connection
+          // error, API error) rather than vibe being intentionally disabled.
+          vibeSkipped: includeVibe && validVibes.length === 0,
           note: combinedVibeDistribution ? null : validVibes.length === 1
             ? 'Only one video with comments — combined view not applicable.'
-            : 'Vibe classification unavailable.',
+            : includeVibe && validVibes.length === 0
+              ? 'Vibe classification failed — this may indicate a connection error or API issue. Re-run credibility_check to retry.'
+              : 'Vibe classification unavailable.',
         },
         topFlags,
         dataSufficiency: laneScores.length === 2 ? 'full' : laneScores.length === 1 ? 'partial' : 'none',
