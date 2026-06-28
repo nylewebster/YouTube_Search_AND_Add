@@ -171,16 +171,35 @@ export function createResearchBriefClient({
         let summaryResult = null;
         try {
           const details = await youtubeClient.getVideoDetails(videoId);
-          const { getChunkedTranscript } = await import('./transcript-client.js');
+          const { getChunkedTranscript, classifyTranscriptError } = await import('./transcript-client.js');
+          const { getChunkedTranscriptViaWhisper, whisperFallbackAvailable } = await import('./whisper-fallback.js');
           let transcript = null;
-          let caveat = null;
+          let transcriptErrorClassification = null;
+          let transcriptSource = null;
 
           try {
             const { chunks, totalWords, totalDurationSeconds } = await getChunkedTranscript(videoId, 10 * 60);
             transcript = { chunks, totalWords, totalDurationSeconds };
+            transcriptSource = 'youtube_captions';
           } catch (transcriptErr) {
-            console.error(`[research-brief] transcript failed for ${videoId}: ${transcriptErr.message}`);
-            caveat = transcriptErr.message;
+            transcriptErrorClassification = classifyTranscriptError(transcriptErr);
+            console.error(`[research-brief] captions failed for ${videoId} (${transcriptErrorClassification}): ${transcriptErr.message}`);
+
+            // Whisper fallback — always attempt it since research_brief
+            // prioritizes accuracy over cost. Transcript is non-negotiable
+            // for research quality; metadata-only is a last resort only.
+            if (whisperFallbackAvailable()) {
+              try {
+                console.error(`[research-brief] trying Whisper fallback for ${videoId}`);
+                const { chunks, totalWords, totalDurationSeconds } = await getChunkedTranscriptViaWhisper(videoId, 10 * 60);
+                transcript = { chunks, totalWords, totalDurationSeconds };
+                transcriptSource = 'whisper_fallback';
+              } catch (whisperErr) {
+                console.error(`[research-brief] Whisper fallback also failed for ${videoId}: ${whisperErr.message}`);
+              }
+            } else {
+              console.error(`[research-brief] Whisper fallback unavailable (no OPENAI_API_KEY) for ${videoId}`);
+            }
           }
 
           summaryResult = await summarizeTranscript({
@@ -188,8 +207,17 @@ export function createResearchBriefClient({
             channel: details.channel,
             transcript,
             description: details.description,
-            caveat,
+            caveat: !transcript ? `Transcript unavailable (${transcriptErrorClassification ?? 'unknown'})` : null,
           });
+
+          // Surface the error classification so callers don't have to re-run
+          // youtube_summarize_video manually to diagnose a metadata fallback
+          if (transcriptErrorClassification) {
+            summaryResult.transcriptErrorClassification = transcriptErrorClassification;
+          }
+          if (transcriptSource) {
+            summaryResult.transcriptSource = transcriptSource;
+          }
         } catch (err) {
           console.error(`[research-brief] summarize failed for ${videoId}:`, err.message);
           summaryResult = { summary: `Summary unavailable: ${err.message}`, source: 'error' };
