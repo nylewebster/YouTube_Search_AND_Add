@@ -55,8 +55,10 @@ export const toolDefinitions = [
   {
     name: 'youtube_search',
     description:
-      'Search YouTube for videos without adding anything. Use this when the user wants to ' +
-      'browse or review options before deciding what to add.',
+      'Search YouTube for videos without adding anything to a playlist. Use this when the user wants to ' +
+      'browse, review, or evaluate options before deciding what to add — returns video titles, channel names, ' +
+      'published dates, thumbnails, and URLs. Supports sorting by relevance, date, viewCount, or rating. ' +
+      'For searching AND adding in one step, use youtube_search_and_add instead.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -91,7 +93,7 @@ export const toolDefinitions = [
   },
   {
     name: 'youtube_list_playlists',
-    description: "List the user's YouTube playlists with item counts and privacy status.",
+    description: "List the authenticated user's YouTube playlists — returns each playlist's title, item count, privacy status (public/private/unlisted), and playlist ID. Use this to see what playlists exist before adding videos, or to find a playlist name to pass to other tools.",
     inputSchema: { type: 'object', properties: {} }
   },
   {

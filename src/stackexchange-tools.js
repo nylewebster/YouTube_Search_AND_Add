@@ -157,7 +157,7 @@ export const toolDefinitions = [
   {
     name: 'stackexchange_list_sites',
     description:
-      "List Stack Exchange sites (Stack Overflow, Parenting, Cooking, Sci-Fi, Arqade for gaming, etc.) so you can pick the right `site` slug for a topic that isn't programming.",
+      "List all available Stack Exchange network sites — Stack Overflow for programming, Arqade for gaming, Super User for computing, Skeptics for fact-checking, Cooking, Parenting, Music, and ~180 others. Use this to discover the right site slug before searching with stackexchange_search or stackexchange_smart_search. Results include each site's name, api_site_parameter slug, audience description, and URL.",
     inputSchema: { type: 'object', properties: {} },
   },
   {
