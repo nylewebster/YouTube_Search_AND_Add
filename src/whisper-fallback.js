@@ -70,6 +70,12 @@ async function downloadAudio(videoId) {
     // download before failing on size. q:a 8 keeps a full 30-min video
     // comfortably under 19MB instead.
     '--audio-quality', '8',
+    // Force mono + 16kHz via ffmpeg post-processing. Whisper was trained on
+    // 16kHz mono audio, so stereo and higher sample rates are wasted bytes
+    // with zero transcription benefit. This roughly halves file size vs stereo:
+    // a 43-min video that was 26MB (stereo) becomes ~13MB (mono 16kHz),
+    // keeping videos up to ~80 min safely under OpenAI's 25MB upload limit.
+    '--postprocessor-args', 'ffmpeg:-ac 1 -ar 16000',
     '--match-filter', `duration <= ${MAX_DURATION_SECONDS}`,
     '--no-playlist',
     '-o', outputTemplate
@@ -128,7 +134,8 @@ async function downloadAudio(videoId) {
     console.error(`[whisper-fallback] audio for video ${videoId} is ${(size / 1024 / 1024).toFixed(1)}MB, over the 25MB limit`);
     throw new Error(
       `Extracted audio is ${(size / 1024 / 1024).toFixed(1)}MB, over OpenAI's 25MB limit. ` +
-      `Try a shorter video, or lower WHISPER_MAX_DURATION_SECONDS so long videos get rejected earlier.`
+      `The video is likely over ~80 min. Lower WHISPER_MAX_DURATION_SECONDS to reject it earlier, ` +
+      `or implement audio chunking to handle arbitrarily long videos.`
     );
   }
 
