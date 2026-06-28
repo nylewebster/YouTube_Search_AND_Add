@@ -161,6 +161,32 @@ app.post('/credibility-render', async (req, res) => {
   }
 });
 
+// Research brief endpoint — called by the credibility viewer's Research Brief
+// mode to run a full research_brief and return the JSON result. Auth is the
+// same simple Bearer token check against OAUTH_CLIENT_SECRET as above.
+app.post('/research-render', async (req, res) => {
+  const authHeader = req.headers['authorization'] ?? '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  if (!token || token !== process.env.OAUTH_CLIENT_SECRET) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  const { topic, goal, videoCount = 3, includeVibe = true } = req.body ?? {};
+  if (!topic) {
+    res.status(400).json({ error: 'Missing required field: topic' });
+    return;
+  }
+
+  try {
+    const result = await brief.generateBrief({ topic, goal, videoCount, includeVibe });
+    res.json(result);
+  } catch (err) {
+    console.error('[research-render] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 function requireAuth(req, res, next) {
   if (!validateAccessToken(req)) {
     res
