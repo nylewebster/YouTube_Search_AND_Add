@@ -28,6 +28,7 @@ import { createStackExchangeClient, toolDefinitions as seToolDefinitions, handle
 import { createCredibilityClient, toolDefinitions as credToolDefinitions, handleToolCall as handleCredToolCall } from './credibility-tools.js';
 import { createOrchestratorClient, toolDefinitions as orchToolDefinitions, handleToolCall as handleOrchToolCall } from './orchestrator-tools.js';
 import { createStackExchangeSmartSearchClient, toolDefinitions as seSmartToolDefinitions, handleToolCall as handleSeSmartToolCall } from './stackexchange-smart-search-tools.js';
+import { createResearchBriefClient, toolDefinitions as briefToolDefinitions, handleToolCall as handleBriefToolCall } from './research-brief-tools.js';
 import fs from 'node:fs';
 import { registerOAuthRoutes, validateAccessToken } from './oauth.js';
 
@@ -49,13 +50,14 @@ const se = createStackExchangeClient();
 const cred = createCredibilityClient({ stackExchangeClient: se, youtubeClient: yt });
 const orch = createOrchestratorClient({ credibilityClient: cred, youtubeClient: yt, stackExchangeClient: se });
 const seSmart = createStackExchangeSmartSearchClient({ stackExchangeClient: se });
+const brief = createResearchBriefClient({ youtubeClient: yt, credibilityClient: cred, stackExchangeSmartSearchClient: seSmart });
 
 // Merge tool definitions from all sources, and build a name -> handler
 // lookup so the call handler below knows which client/dispatcher to route
 // each tool to. A Map instead of per-service Sets/branches, since a third
 // (and eventually fourth, once Reddit lands) service makes binary checks
 // awkward fast.
-const allToolDefinitions = [...ytToolDefinitions, ...seToolDefinitions, ...credToolDefinitions, ...orchToolDefinitions, ...seSmartToolDefinitions];
+const allToolDefinitions = [...ytToolDefinitions, ...seToolDefinitions, ...credToolDefinitions, ...orchToolDefinitions, ...seSmartToolDefinitions, ...briefToolDefinitions];
 
 const toolRouter = new Map([
   ...ytToolDefinitions.map((t) => [t.name, (n, a) => handleYtToolCall(yt, n, a)]),
@@ -63,6 +65,7 @@ const toolRouter = new Map([
   ...credToolDefinitions.map((t) => [t.name, (n, a) => handleCredToolCall(cred, n, a)]),
   ...orchToolDefinitions.map((t) => [t.name, (n, a) => handleOrchToolCall(orch, n, a)]),
   ...seSmartToolDefinitions.map((t) => [t.name, (n, a) => handleSeSmartToolCall(seSmart, n, a)]),
+  ...briefToolDefinitions.map((t) => [t.name, (n, a) => handleBriefToolCall(brief, n, a)]),
 ]);
 
 if (!process.env.OPENAI_API_KEY) {
