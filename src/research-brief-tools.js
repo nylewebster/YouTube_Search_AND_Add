@@ -32,6 +32,8 @@
  * toolDefinitions (flat array), and handleToolCall(client, name, args).
  */
 
+import { classifyCommentVibes, buildVibeDistribution, BATCH_SIZE as VIBE_BATCH_SIZE } from './vibe-classifier.js';
+
 const ANTHROPIC_API_BASE = 'https://api.anthropic.com/v1/messages';
 const MODEL = 'claude-sonnet-4-6';
 
@@ -86,6 +88,93 @@ async function summarizeTranscript({ title, channel, transcript, description, ca
   return { summary, source: 'transcript' };
 }
 
+// ─── Brief config presets (A/B knobs) ─────────────────────────────────────────
+// These bundle the cost/quality levers that affect a brief into named presets
+// so they can be A/B tested in the field. Every brief echoes its resolved
+// config back in the output (`config` on generateBrief's return) and the viewer
+// labels it, so two briefs run under different presets are distinguishable at a
+// glance and you can decide which you prefer from real results.
+//
+// Modules the presets toggle:
+//   - vibe         : run comment-sentiment classification (emoji distribution).
+//                    Adds a Claude API call per ~50 comments. Off = scores only.
+//   - commentDepth : how many comments to sample per video for integrity + vibe.
+//                    Deeper = more accurate, more cost/latency.
+// Keep keys in sync with BRIEF_PRESETS in credibility-viewer/src/api.js.
+export const VIBE_PRESETS = {
+  full: { label: 'Full — vibe on, deep sample', includeVibe: true,  maxComments: 1500 },
+  lite: { label: 'Lite — vibe on, shallow sample', includeVibe: true, maxComments: 500 },
+  off:  { label: 'Off — no vibe, deep sample', includeVibe: false, maxComments: 1500 },
+};
+
+export const DEFAULT_VIBE_MODE = 'full';
+
+// Rough vibe-classification cost model. Vibe runs on Sonnet 4.6 ($3/MTok in,
+// $15/MTok out) in batches of VIBE_BATCH_SIZE comments; each batch is ~3k input
+// + ~200 output tokens ≈ $0.012. These estimates are deliberately approximate
+// (real token counts vary with comment length) — they exist so the A/B presets
+// can be compared on real spend in the field, not billed to the cent.
+const VIBE_COST_PER_BATCH_USD = 0.012;
+
+function estimateVibeCostUsd(commentCount) {
+  const batches = Math.ceil((commentCount || 0) / VIBE_BATCH_SIZE);
+  return Math.round(batches * VIBE_COST_PER_BATCH_USD * 100) / 100;
+}
+
+// Build the labeled, per-module config breakdown attached to every brief. This
+// is the explicit "what does this modularity change" surface for A/B review.
+// vibeCommentsClassified / videosChecked come from the finished run, so the cost
+// figures reflect what this brief actually spent — not a worst-case guess.
+function buildBriefConfig({
+  vibeMode, includeVibe, maxComments, resolvedVibe, resolvedMaxComments, preset,
+  vibeCommentsClassified = 0, videosChecked = 0,
+}) {
+  const overridden =
+    (includeVibe !== undefined && includeVibe !== preset.includeVibe) ||
+    (maxComments !== undefined && maxComments !== preset.maxComments);
+
+  const estimateUsd       = resolvedVibe ? estimateVibeCostUsd(vibeCommentsClassified) : 0;
+  const ceilingPerVideoUsd = estimateVibeCostUsd(resolvedMaxComments);
+  const ceilingUsd        = resolvedVibe ? Math.round(ceilingPerVideoUsd * videosChecked * 100) / 100 : 0;
+
+  return {
+    vibeMode,
+    label: overridden ? `Custom (based on ${vibeMode})` : preset.label,
+    overridden,
+    // Cost figures cover vibe classification only — the lever these presets
+    // change. Transcript summaries cost extra but are constant across presets,
+    // so they're left out to keep the A/B comparison apples-to-apples.
+    cost: {
+      currency: 'USD',
+      model: MODEL,
+      basis: 'Vibe classification only — the lever these presets change. Transcript summaries cost extra and are constant across presets.',
+      vibeCommentsClassified,
+      estimateUsd,
+      ceilingUsd,
+    },
+    modules: [
+      {
+        key: 'vibe',
+        label: 'Vibe classification',
+        value: resolvedVibe ? 'on' : 'off',
+        cost: resolvedVibe
+          ? `~$${estimateUsd.toFixed(2)} (${vibeCommentsClassified.toLocaleString()} comments)`
+          : '$0.00 (off)',
+        effect: resolvedVibe
+          ? 'Comment sentiment classified into an emoji distribution (Claude API call per ~50 comments).'
+          : 'Skipped — integrity scores only, no emoji distribution and no extra Claude API cost.',
+      },
+      {
+        key: 'commentDepth',
+        label: 'Comment sample depth',
+        value: `${resolvedMaxComments} max`,
+        cost: resolvedVibe ? `ceiling ~$${ceilingPerVideoUsd.toFixed(2)}/video` : 'n/a (vibe off)',
+        effect: 'Comments sampled per video for integrity + vibe. Deeper = more accurate, higher cost/latency.',
+      },
+    ],
+  };
+}
+
 // ─── Client factory ───────────────────────────────────────────────────────────
 
 export function createResearchBriefClient({
@@ -106,7 +195,9 @@ export function createResearchBriefClient({
      * @param {string} params.goal - What you're trying to find out (e.g. "is it worth buying at $600?")
      * @param {string} [params.playlistName] - Playlist to add videos to (defaults to server default)
      * @param {number} [params.videoCount=3] - Number of videos to search, summarize, and check
-     * @param {boolean} [params.includeVibe=true] - Run vibe classification on comment sections
+     * @param {string} [params.vibeMode='full'] - A/B preset bundling the cost/quality knobs (see VIBE_PRESETS)
+     * @param {boolean} [params.includeVibe] - Override: run vibe classification (defaults to the preset)
+     * @param {number} [params.maxComments] - Override: comments to sample per video (defaults to the preset)
      * @param {boolean} [params.includeSeAuthority=true] - Run Stack Exchange authority check
      */
     async generateBrief({
@@ -114,14 +205,22 @@ export function createResearchBriefClient({
       goal,
       playlistName,
       videoCount = 3,
-      includeVibe = true,
+      vibeMode = DEFAULT_VIBE_MODE,
+      includeVibe,
+      maxComments,
       includeSeAuthority = true,
     }) {
       if (!process.env.ANTHROPIC_API_KEY) {
         throw new Error('ANTHROPIC_API_KEY is required for research_brief.');
       }
 
-      console.error(`[research-brief] starting brief for topic: "${topic}", goal: "${goal}"`);
+      // Resolve the A/B preset, allowing explicit per-field overrides on top.
+      const resolvedMode = VIBE_PRESETS[vibeMode] ? vibeMode : DEFAULT_VIBE_MODE;
+      const preset = VIBE_PRESETS[resolvedMode];
+      const resolvedVibe = includeVibe ?? preset.includeVibe;
+      const resolvedMaxComments = maxComments ?? preset.maxComments;
+
+      console.error(`[research-brief] starting brief for topic: "${topic}", goal: "${goal}" — config: ${preset.label} (vibe=${resolvedVibe}, maxComments=${resolvedMaxComments})`);
 
       // ── Stage 1: Smart search + playlist ──────────────────────────────────
       console.error(`[research-brief] stage 1: searching YouTube for top ${videoCount} videos`);
@@ -146,7 +245,7 @@ export function createResearchBriefClient({
               searchResults.map(r => r.videoId),
               { skipDuplicates: true }
             );
-            playlistResult = { name: targetPlaylist.title, ...summary };
+            playlistResult = { id: targetPlaylist.id, name: targetPlaylist.title, ...summary };
           }
         }
       } catch (err) {
@@ -228,9 +327,23 @@ export function createResearchBriefClient({
         try {
           credibilityResult = await credibilityClient.checkYouTubeVideo({
             videoId,
-            maxComments: 1500,
+            maxComments: resolvedMaxComments,
             fetchAllReplies: true,
           });
+
+          // Vibe classification — checkYouTubeVideo only scores integrity, so
+          // mirror the orchestrator here: classify comment sentiment and attach
+          // a vibe distribution (emoji-keyed counts/percentages) so the brief
+          // and the viewer's Research Brief mode can show it per video. Runs
+          // before comments are stripped below, and only when requested.
+          if (resolvedVibe && credibilityResult.comments?.length) {
+            try {
+              const classified = await classifyCommentVibes(credibilityResult.comments);
+              credibilityResult.vibeDistribution = buildVibeDistribution(classified);
+            } catch (vibeErr) {
+              console.error(`[research-brief] vibe classification failed for ${videoId}:`, vibeErr.message);
+            }
+          }
 
           // Run SE authority check via title-derived query if requested
           if (includeSeAuthority && stackExchangeSmartSearchClient) {
@@ -293,11 +406,23 @@ export function createResearchBriefClient({
         transcriptErrorClassification: v.summary?.transcriptErrorClassification ?? null,
       }));
 
+      // ── Resolve config + cost from the finished run ───────────────────────
+      // Count comments actually classified for vibe (0 when vibe is off) so the
+      // cost estimate reflects real spend, making A/B preset comparison concrete.
+      const vibeCommentsClassified = videoResults.reduce(
+        (sum, v) => sum + (v.credibility?.vibeDistribution?.total ?? 0), 0);
+      const config = buildBriefConfig({
+        vibeMode: resolvedMode, includeVibe, maxComments,
+        resolvedVibe, resolvedMaxComments, preset,
+        vibeCommentsClassified, videosChecked: videoResults.length,
+      });
+
       // ── Build the brief ───────────────────────────────────────────────────
       return {
         topic,
         goal,
         generatedAt: new Date().toISOString(),
+        config,
         playlist: playlistResult,
         headlineIntegrityScore,
         videoCount: videoResults.length,
@@ -340,9 +465,18 @@ export const toolDefinitions = [
           type: 'number',
           description: 'Number of videos to search, summarize, and check (default 3, max 5 recommended)',
         },
+        vibeMode: {
+          type: 'string',
+          enum: ['full', 'lite', 'off'],
+          description: 'A/B preset bundling the cost/quality knobs (default "full"). "full" = vibe on, 1500-comment sample; "lite" = vibe on, 500-comment sample (cheaper/faster); "off" = no vibe classification. The resolved config is echoed back in the brief\'s `config` field.',
+        },
         includeVibe: {
           type: 'boolean',
-          description: 'Run vibe classification on comment sections (default true). Set false to skip Claude API sentiment calls — faster but no emoji distribution.',
+          description: 'Override the preset\'s vibe setting. Run vibe classification on comment sections — set false to skip Claude API sentiment calls (faster, no emoji distribution).',
+        },
+        maxComments: {
+          type: 'number',
+          description: 'Override the preset\'s comment sample depth (comments sampled per video for integrity + vibe).',
         },
         includeSeAuthority: {
           type: 'boolean',

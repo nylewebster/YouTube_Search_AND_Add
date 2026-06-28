@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { postCredibility, postResearch } from './api.js';
+import { postCredibility, postResearch, BRIEF_PRESETS } from './api.js';
 import CredibilityReport from './CredibilityReport.jsx';
 import ResearchBrief from './ResearchBrief.jsx';
 
@@ -15,7 +15,7 @@ export default function App() {
   const [briefTopic, setBriefTopic]           = useState('');
   const [briefGoal, setBriefGoal]             = useState('');
   const [briefVideoCount, setBriefVideoCount] = useState(3);
-  const [briefIncludeVibe, setBriefIncludeVibe] = useState(true);
+  const [briefVibeMode, setBriefVibeMode]     = useState('full'); // A/B preset; 'full' = vibe on
   const [briefResult, setBriefResult]         = useState(null);
 
   // Shared
@@ -56,7 +56,7 @@ export default function App() {
         topic: trimmed,
         goal: briefGoal.trim() || undefined,
         videoCount: briefVideoCount,
-        includeVibe: briefIncludeVibe,
+        vibeMode: briefVibeMode,
       });
       setBriefResult(result);
     } catch (err) {
@@ -149,6 +149,18 @@ export default function App() {
               onChange={(e) => setBriefVideoCount(Number(e.target.value))}
             />
           </label>
+          <label className="form__label">
+            Config:
+            <select
+              className="form__select"
+              value={briefVibeMode}
+              onChange={(e) => setBriefVibeMode(e.target.value)}
+            >
+              {BRIEF_PRESETS.map((p) => (
+                <option key={p.key} value={p.key}>{p.label}</option>
+              ))}
+            </select>
+          </label>
           <button
             className="form__submit"
             type="submit"
@@ -156,14 +168,6 @@ export default function App() {
           >
             {loading ? 'Generating brief…' : 'Generate Brief'}
           </button>
-          <label className="form__checkbox">
-            <input
-              type="checkbox"
-              checked={briefIncludeVibe}
-              onChange={(e) => setBriefIncludeVibe(e.target.checked)}
-            />
-            Include vibe classification
-          </label>
         </form>
       )}
 
