@@ -133,6 +133,34 @@ registerOAuthRoutes(app, { baseUrl: BASE_URL });
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
+// Credibility viewer endpoint — called by the deployed credibility-viewer
+// service (and the local Vite dev proxy) to run a credibility check and
+// return the JSON result. Auth is a simple Bearer token check against
+// OAUTH_CLIENT_SECRET rather than the full MCP OAuth flow, since this is
+// a single-user personal tool and the viewer is already behind obscurity.
+app.post('/credibility-render', async (req, res) => {
+  const authHeader = req.headers['authorization'] ?? '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  if (!token || token !== process.env.OAUTH_CLIENT_SECRET) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  const { input, includeVibe = true } = req.body ?? {};
+  if (!input) {
+    res.status(400).json({ error: 'Missing required field: input' });
+    return;
+  }
+
+  try {
+    const result = await orch.checkCredibility({ input, includeVibe });
+    res.json(result);
+  } catch (err) {
+    console.error('[credibility-render] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 function requireAuth(req, res, next) {
   if (!validateAccessToken(req)) {
     res
