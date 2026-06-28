@@ -172,14 +172,16 @@ app.post('/research-render', async (req, res) => {
     return;
   }
 
-  const { topic, goal, videoCount = 3, includeVibe = true } = req.body ?? {};
+  // vibeMode selects an A/B preset (default 'full'); includeVibe/maxComments are
+  // optional per-field overrides. generateBrief resolves and echoes the config.
+  const { topic, goal, videoCount = 3, vibeMode, includeVibe, maxComments } = req.body ?? {};
   if (!topic) {
     res.status(400).json({ error: 'Missing required field: topic' });
     return;
   }
 
   try {
-    const result = await brief.generateBrief({ topic, goal, videoCount, includeVibe });
+    const result = await brief.generateBrief({ topic, goal, videoCount, vibeMode, includeVibe, maxComments });
     res.json(result);
   } catch (err) {
     console.error('[research-render] error:', err.message);

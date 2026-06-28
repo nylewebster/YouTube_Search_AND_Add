@@ -31,11 +31,20 @@ export async function postCredibility(input, includeVibe) {
   return data;
 }
 
-export async function postResearch({ topic, goal, videoCount, includeVibe }) {
+// A/B presets for the Research Brief mode. Mirrors VIBE_PRESETS in
+// src/research-brief-tools.js — keep keys in sync. The server is the source of
+// truth for what each preset actually does; these labels just drive the selector.
+export const BRIEF_PRESETS = [
+  { key: 'full', label: 'Full — vibe on, deep sample (1500)' },
+  { key: 'lite', label: 'Lite — vibe on, shallow sample (500)' },
+  { key: 'off',  label: 'Off — no vibe' },
+];
+
+export async function postResearch({ topic, goal, videoCount, vibeMode }) {
   const body = { topic };
-  if (goal)                             body.goal = goal;
-  if (typeof videoCount === 'number')   body.videoCount = videoCount;
-  if (typeof includeVibe === 'boolean') body.includeVibe = includeVibe;
+  if (goal)                           body.goal = goal;
+  if (typeof videoCount === 'number') body.videoCount = videoCount;
+  if (vibeMode)                       body.vibeMode = vibeMode;
 
   const res = await fetch('/api/research-render', {
     method: 'POST',
